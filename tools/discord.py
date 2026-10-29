@@ -35,7 +35,7 @@ def call(method: str, path: str, body: dict | None = None):
     req = urllib.request.Request(API + path, method=method,
                                  data=json.dumps(body).encode() if body is not None else None,
                                  headers={"Authorization": f"Bot {token()}", "Content-Type": "application/json",
-                                          "User-Agent": "DiscordBot (doi-games, 1)"})
+                                          "User-Agent": "DiscordBot (joibongbang, 1)"})
     for attempt in range(3):
         try:
             with urllib.request.urlopen(req, timeout=20) as r:
