@@ -29,7 +29,7 @@
 #include <getopt.h>
 #include <signal.h>
 #include <stdarg.h>
-#include <stdint.h>
+#include <stdint.h> /* fixed-size types; plain long/unsigned only where Xlib requires them */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -71,15 +71,15 @@ static GC gc;
 static XFontStruct *font;
 static Atom a_opacity;  /* _NET_WM_WINDOW_OPACITY, read by compositors */
 static Cursor cur_cross, cur_move;
-static unsigned long border_px;
-static long capture_at; /* scheduled time (ms) of a new capture, 0 = none */
+static uint32_t border_px;
+static int64_t capture_at; /* scheduled time (ms) of a new capture, 0 = none */
 
 /* wall clock in milliseconds */
-static long now_ms(void)
+static int64_t now_ms(void)
 {
     struct timeval tv;
     gettimeofday(&tv, NULL);
-    return tv.tv_sec * 1000L + tv.tv_usec / 1000;
+    return (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
 }
 
 /* round to the nearest int (halves away from zero) */
@@ -111,11 +111,11 @@ static void null_fd(int fd)
 /* One color channel of a TrueColor visual: the bits of the pixel value it
  * uses (mask), how far they are shifted, and the largest value (max).
  * ch[0] = red, ch[1] = green, ch[2] = blue. */
-typedef struct { unsigned long mask, max; int shift; } Chan;
+typedef struct { uint32_t mask, max; int shift; } Chan;
 static Chan ch[3];
 
 /* work out shift and max from a mask such as 0xff0000 */
-static void chan_init(Chan *c, unsigned long m)
+static void chan_init(Chan *c, uint32_t m)
 {
     c->mask = m;
     c->shift = 0;
@@ -124,25 +124,25 @@ static void chan_init(Chan *c, unsigned long m)
 }
 
 /* 0xRRGGBB -> pixel value for this display */
-static unsigned long rgb_pixel(unsigned rgb)
+static uint32_t rgb_pixel(uint32_t rgb)
 {
-    unsigned v[3] = { (rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255 };
-    unsigned long p = 0;
+    uint32_t v[3] = { (rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255 };
+    uint32_t p = 0;
     for (int i = 0; i < 3; i++)
         p |= (v[i] * ch[i].max / 255) << ch[i].shift;
     return p;
 }
 
 /* pixel value -> 3 bytes R, G, B (each 0..255) */
-static void pixel_rgb(unsigned long p, unsigned char *out)
+static void pixel_rgb(uint32_t p, uint8_t *out)
 {
     for (int i = 0; i < 3; i++)
         out[i] = ch[i].max ? ((p & ch[i].mask) >> ch[i].shift) * 255 / ch[i].max : 0;
 }
 
-static unsigned long pixel_half(unsigned long p) /* half brightness */
+static uint32_t pixel_half(uint32_t p) /* half brightness */
 {
-    unsigned long q = 0;
+    uint32_t q = 0;
     for (int i = 0; i < 3; i++)
         q |= ((p & ch[i].mask) >> 1) & ch[i].mask; /* halve each channel in place */
     return q;
@@ -156,7 +156,7 @@ static int font_asc(void) { return font ? font->ascent : 10; }
 static int font_h(void) { return font ? font->ascent + font->descent : 13; }
 
 /* draw s with its baseline at y, in color fg (0xRRGGBB) */
-static void draw_text(Drawable d, int x, int y, const char *s, unsigned fg)
+static void draw_text(Drawable d, int x, int y, const char *s, uint32_t fg)
 {
     XSetForeground(dpy, gc, rgb_pixel(fg));
     XDrawString(dpy, d, gc, x, y, s, strlen(s));
@@ -165,10 +165,10 @@ static void draw_text(Drawable d, int x, int y, const char *s, unsigned fg)
 /* ---------- PNG (stb_image_write) ---------- */
 
 /* a captured image: w*h pixels, 3 bytes (R, G, B) each, rows top to bottom */
-typedef struct { int w, h; unsigned char *rgb; } Img;
+typedef struct { int w, h; uint8_t *rgb; } Img;
 
 /* growable byte buffer; fail is set if memory ran out */
-typedef struct { unsigned char *p; size_t len, cap; int fail; } Buf;
+typedef struct { uint8_t *p; size_t len, cap; int fail; } Buf;
 
 /* stb write callback: append n bytes to the Buf in ctx */
 static void buf_put(void *ctx, void *data, int n)
@@ -180,7 +180,7 @@ static void buf_put(void *ctx, void *data, int n)
         size_t cap = b->cap ? b->cap : 65536;
         while (cap < b->len + n)
             cap *= 2; /* grow by doubling */
-        unsigned char *q = realloc(b->p, cap);
+        uint8_t *q = realloc(b->p, cap);
         if (!q) {
             b->fail = 1;
             return;
@@ -268,14 +268,14 @@ static Atom a_clipboard, a_targets, a_timestamp, a_png, a_incr, a_time;
 static Window clip_win;   /* hidden window that owns the selection */
 static size_t chunk_max;  /* largest property we write in one request */
 /* the PNG we are serving, and the time we took ownership */
-static struct { unsigned char *data; size_t len; Time time; int owned; } clip;
+static struct { uint8_t *data; size_t len; Time time; int owned; } clip;
 
 /* INCR transfer, for data larger than one X request: the data is sent in
  * chunks, one each time the requestor deletes the property. Each transfer keeps
  * its own copy so it can finish even if the clipboard changes meanwhile.
  * req/prop = where to write, off = bytes sent so far, last = time of the last
  * chunk (for the timeout). */
-typedef struct { Window req; Atom prop; unsigned char *data; size_t len, off; long last; } Xfer;
+typedef struct { Window req; Atom prop; uint8_t *data; size_t len, off; int64_t last; } Xfer;
 static Xfer xfers[MAX_XFERS];
 static int nxfers;
 
@@ -344,7 +344,7 @@ static void clip_request(XSelectionRequestEvent *r)
             XChangeProperty(dpy, r->requestor, prop, XA_ATOM, 32, PropModeReplace, (unsigned char *)t, 3);
             ev.property = prop;
         } else if (r->target == a_timestamp) {
-            long v = (long)clip.time;
+            long v = (long)clip.time; /* format 32 data must be an array of long in Xlib */
             XChangeProperty(dpy, r->requestor, prop, XA_INTEGER, 32, PropModeReplace, (unsigned char *)&v, 1);
             ev.property = prop;
         } else if (r->target == a_png) {
@@ -365,7 +365,7 @@ static void clip_request(XSelectionRequestEvent *r)
                     /* the requestor deletes the property to ask for the next chunk */
                     XSelectInput(dpy, r->requestor, PropertyChangeMask);
                     /* writing an INCR property (holding the total size) starts the transfer */
-                    long size = (long)clip.len;
+                    long size = (long)clip.len; /* format 32 = long, see TIMESTAMP above */
                     XChangeProperty(dpy, r->requestor, prop, a_incr, 32, PropModeReplace, (unsigned char *)&size, 1);
                     ev.property = prop;
                 }
@@ -406,8 +406,8 @@ typedef struct {
     Img img;                /* original pixels (copy/save always use these) */
     int x, y, w, h, dx, dy; /* window position and size; dx/dy = grab offset while dragging */
     double scale, alpha;    /* zoom factor, opacity */
-    unsigned long border;   /* current border color (changes while flashing) */
-    long flash_end;         /* when the flash ends (ms), 0 = not flashing */
+    uint32_t border;        /* current border color (changes while flashing) */
+    int64_t flash_end;      /* when the flash ends (ms), 0 = not flashing */
     Time last_click;        /* for double click detection */
 } Pin;
 
@@ -449,21 +449,21 @@ static void pin_render(Pin *p)
     xi->data = malloc((size_t)xi->bytes_per_line * h);
     for (int y = 0; y < h; y++) {
         /* center of output row y mapped into the source, minus half a pixel */
-        long fy = (long)(2 * y + 1) * s->h * 128 / h - 128;
+        int64_t fy = (int64_t)(2 * y + 1) * s->h * 128 / h - 128;
         if (fy < 0) fy = 0;
         int y0 = fy >> 8, ty = fy & 255, y1 = y0 + 1 < s->h ? y0 + 1 : y0;
         for (int x = 0; x < w; x++) {
-            long fx = (long)(2 * x + 1) * s->w * 128 / w - 128;
+            int64_t fx = (int64_t)(2 * x + 1) * s->w * 128 / w - 128;
             if (fx < 0) fx = 0;
             int x0 = fx >> 8, tx = fx & 255, x1 = x0 + 1 < s->w ? x0 + 1 : x0;
             /* the 4 source pixels around the point: a b / c d */
-            const unsigned char *a = s->rgb + ((size_t)y0 * s->w + x0) * 3,
-                                *b = s->rgb + ((size_t)y0 * s->w + x1) * 3,
-                                *c = s->rgb + ((size_t)y1 * s->w + x0) * 3,
-                                *d = s->rgb + ((size_t)y1 * s->w + x1) * 3;
-            unsigned v = 0;
+            const uint8_t *a = s->rgb + ((size_t)y0 * s->w + x0) * 3,
+                          *b = s->rgb + ((size_t)y0 * s->w + x1) * 3,
+                          *c = s->rgb + ((size_t)y1 * s->w + x0) * 3,
+                          *d = s->rgb + ((size_t)y1 * s->w + x1) * 3;
+            uint32_t v = 0;
             for (int i = 0; i < 3; i++) {
-                unsigned top = a[i] * (256 - tx) + b[i] * tx, bot = c[i] * (256 - tx) + d[i] * tx;
+                uint32_t top = a[i] * (256 - tx) + b[i] * tx, bot = c[i] * (256 - tx) + d[i] * tx;
                 v = v << 8 | ((top * (256 - ty) + bot * ty) >> 16); /* /256/256 */
             }
             XPutPixel(xi, x, y, rgb_pixel(v));
@@ -567,7 +567,7 @@ static void pin_fade(Pin *p, double step)
 }
 
 /* briefly color the border (green = ok, red = failed); the main loop restores it */
-static void pin_flash(Pin *p, unsigned rgb)
+static void pin_flash(Pin *p, uint32_t rgb)
 {
     p->border = rgb_pixel(rgb);
     p->flash_end = now_ms() + FLASH_MS;
@@ -629,7 +629,7 @@ static void menu_draw(void)
     XFillRectangle(dpy, menu.win, gc, 0, 0, menu.w, menu.ih * MENU_N);
     for (int i = 0; i < MENU_N; i++) {
         int y = i * menu.ih, base = y + (menu.ih - font_h()) / 2 + font_asc();
-        unsigned fg = 0xeeeeee;
+        uint32_t fg = 0xeeeeee;
         if (i == menu.sel) {
             XSetForeground(dpy, gc, border_px);
             XFillRectangle(dpy, menu.win, gc, 0, y, menu.w, menu.ih);
@@ -852,7 +852,7 @@ static void start_capture(void)
     memcpy(d, shot->data, n);
     XImage *dark = XCreateImage(dpy, vis, shot->depth, ZPixmap, 0, d, SW, SH, shot->bitmap_pad, shot->bytes_per_line);
     uint16_t one = 1;
-    int host_lsb = *(unsigned char *)&one == 1;
+    int host_lsb = *(uint8_t *)&one == 1;
     /* fast path: 32-bit pixels in host byte order can be edited directly;
      * otherwise use the slow but general XGetPixel/XPutPixel */
     if (dark->bits_per_pixel == 32 && (dark->byte_order == LSBFirst) == host_lsb) {
@@ -1199,7 +1199,7 @@ int main(int argc, char **argv)
     /* fixed area from -g / -f, clipped to the screen */
     int gx = 0, gy = 0, gw = SW, gh = SH;
     if (opt.geometry) {
-        unsigned w = 0, h = 0;
+        unsigned int w = 0, h = 0; /* XParseGeometry wants unsigned int */
         int m = XParseGeometry(opt.geometry, &gx, &gy, &w, &h);
         if (!(m & WidthValue) || !(m & HeightValue) || !w || !h)
             return bad_usage("bad --geometry (want WxH+X+Y)", opt.geometry);
@@ -1256,7 +1256,7 @@ int main(int argc, char **argv)
         }
 
         /* timers; wait = ms until the next one, -1 = none */
-        long t = now_ms(), wait = -1;
+        int64_t t = now_ms(), wait = -1;
         if (capture_at) {
             if (t >= capture_at) {
                 capture_at = 0;
@@ -1278,7 +1278,7 @@ int main(int argc, char **argv)
             }
         }
         for (int i = nxfers - 1; i >= 0; i--) {
-            long left = xfers[i].last + XFER_TIMEOUT_MS - t;
+            int64_t left = xfers[i].last + XFER_TIMEOUT_MS - t;
             if (left <= 0)
                 xfer_end(i); /* the requestor went away */
             else if (wait < 0 || left < wait)
