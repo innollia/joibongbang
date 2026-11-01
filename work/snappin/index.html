@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>snappin — X11 캡처 후 같은 자리에 띄우기</title>
+<style>
+body{font:16px/1.6 system-ui,"Malgun Gothic",sans-serif;max-width:760px;margin:40px auto;padding:0 16px;background:#111;color:#eee}
+a{color:#7cf}code,pre{background:#222;border-radius:6px}code{padding:1px 5px}pre{padding:12px;overflow:auto}
+table{border-collapse:collapse}td{border-bottom:1px solid #333;padding:4px 12px 4px 0}
+.btn{display:inline-block;background:#3daee9;color:#000;padding:8px 16px;border-radius:6px;text-decoration:none;font-weight:bold}
+</style>
+<p><a href="../../">← 목록</a></p>
+<h1>snappin</h1>
+<p>X11에서 마우스로 드래그해 화면 일부를 찍으면, 찍은 그림이 <b>찍은 그 자리에</b> 테두리 없는 창으로 떠 있습니다(항상 위). Snipaste의 "핀" 기능과 비슷합니다.</p>
+<p><a class="btn" href="snappin.py" download>snappin.py 받기</a></p>
+
+<h2>설치</h2>
+<pre>sudo apt install python3-tk python3-pil python3-pil.imagetk xclip</pre>
+<p>(xclip은 복사 기능에만 필요합니다. 다른 배포판은 tkinter + Pillow만 있으면 됩니다.)</p>
+
+<h2>실행</h2>
+<pre>python3 snappin.py</pre>
+<p>바탕화면 설정의 단축키(예: <code>Ctrl+Shift+A</code>)에 이 명령을 연결해 두면 편합니다.</p>
+
+<h2>조작</h2>
+<table>
+<tr><td colspan=2><b>캡처 화면</b></td></tr>
+<tr><td>드래그</td><td>영역 고르기 (놓으면 바로 그 자리에 뜸)</td></tr>
+<tr><td>Esc / 오른쪽 클릭</td><td>취소</td></tr>
+<tr><td colspan=2><b>떠 있는 그림</b></td></tr>
+<tr><td>드래그</td><td>옮기기</td></tr>
+<tr><td>휠</td><td>확대 / 축소</td></tr>
+<tr><td>Ctrl + 휠</td><td>투명도 (창 효과가 켜진 환경에서만)</td></tr>
+<tr><td>Ctrl+C</td><td>클립보드에 복사</td></tr>
+<tr><td>Ctrl+S</td><td><code>~/Pictures</code>에 PNG로 저장</td></tr>
+<tr><td>1</td><td>원래 크기</td></tr>
+<tr><td>N</td><td>새 캡처 (여러 장 띄우기)</td></tr>
+<tr><td>더블클릭 / Esc</td><td>닫기</td></tr>
+<tr><td>오른쪽 클릭</td><td>메뉴</td></tr>
+</table>
+<p>떠 있는 그림을 모두 닫으면 프로그램이 끝납니다.</p>
+
+<h2>참고</h2>
+<ul>
+<li>X11 전용입니다. Wayland 세션에서는 화면을 찍지 못하거나 검게 나올 수 있습니다.</li>
+<li>Pillow로 화면을 못 찍으면 <code>maim</code>, <code>import</code>(ImageMagick), <code>scrot</code> 중 있는 것을 대신 씁니다.</li>
+<li>모니터가 여러 개여도 전체 화면을 한 번에 덮고 고릅니다.</li>
+</ul>
+</html>
