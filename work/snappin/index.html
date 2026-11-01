@@ -22,13 +22,16 @@ table{border-collapse:collapse}td{border-bottom:1px solid #333;padding:4px 12px 
 <p>바탕화면 설정의 단축키(예: <code>Ctrl+Shift+A</code>)에 이 명령을 연결해 두면 편합니다.</p>
 
 <h2>C 버전</h2>
-<p>같은 기능을 C로 옮긴 것입니다. Xlib만 쓰고, 파이썬이 없어도 됩니다. 실행 파일 하나라 더 빨리 뜹니다.</p>
-<pre>sudo apt install build-essential libx11-dev xclip
-cc -O2 -o snappin snappin.c -lX11
+<p>같은 기능을 C로 옮긴 것입니다. Xlib와 <a href="https://github.com/nothings/stb">stb_image_write.h</a>(PNG 만들기)를 씁니다. 주석과 출력은 영어입니다.</p>
+<p><code>stb_image_write.h</code>를 <code>snappin.c</code>와 같은 폴더에 두고 빌드하세요.</p>
+<pre>sudo apt install build-essential libx11-dev
+wget https://raw.githubusercontent.com/nothings/stb/master/stb_image_write.h
+cc -O2 -o snappin snappin.c -lX11 -lm
 ./snappin</pre>
 <ul>
+<li>Ctrl+C를 누르면 snappin이 직접 <b>CLIPBOARD</b>에 <code>image/png</code>로 넣습니다(xclip 필요 없음). 이렇게 꺼낼 수 있습니다:<br><code>xclip -o -sel clip -t image/png &gt; image.png</code></li>
+<li>복사한 뒤 그림을 다 닫아도, 다른 것을 복사하기 전까지는 뒤에서 작은 프로세스가 클립보드를 계속 들고 있습니다(xclip과 같은 방식).</li>
 <li>오른쪽 클릭 메뉴는 영어로 나옵니다 (Copy, Save, Actual size, New capture, Close, Close all).</li>
-<li>저장하는 PNG는 압축을 하지 않아서 파이썬 버전보다 파일이 큽니다.</li>
 <li>24비트 트루컬러 화면에서만 동작합니다 (요즘 화면은 거의 다 그렇습니다).</li>
 </ul>
 

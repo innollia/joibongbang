@@ -1,14 +1,22 @@
-/* snappin.c — X11에서 드래그로 화면 일부를 찍고, 찍은 그림을 같은 자리에 떠 있게(핀) 띄운다.
- * snappin.py 를 C로 옮긴 것. Xlib 만 쓴다(PNG 저장은 직접 만든 간단한 인코더로).
+/* snappin.c - drag to capture part of the X11 screen, then pin the capture
+ * as a floating window at the exact same position.
+ * C port of snappin.py. Uses Xlib and stb_image_write.h (PNG encoding).
  *
- * 빌드: cc -O2 -o snappin snappin.c -lX11
- *   Debian/Ubuntu: sudo apt install build-essential libx11-dev xclip
- * 실행: ./snappin   (단축키에 연결해 두면 편하다)
+ * Build (stb_image_write.h must be in the same directory):
+ *   cc -O2 -o snappin snappin.c -lX11 -lm
+ *   Debian/Ubuntu: sudo apt install build-essential libx11-dev
+ * Run: ./snappin   (bind it to a hotkey)
  *
- * 캡처 화면: 드래그 = 영역 선택, Esc / 오른쪽 클릭 = 취소
- * 핀:       드래그 = 이동, 휠 = 확대/축소, Ctrl+휠 = 투명도
- *           Ctrl+C = 복사(xclip 필요), Ctrl+S = 저장, 1 = 원래 크기,
- *           N = 새 캡처, 더블클릭 / Esc = 닫기, 오른쪽 클릭 = 메뉴
+ * Capture screen: drag = select area, Esc / right click = cancel
+ * Pin:            drag = move, wheel = zoom, Ctrl+wheel = opacity
+ *                 Ctrl+C = copy PNG to CLIPBOARD, Ctrl+S = save, 1 = actual size,
+ *                 N = new capture, double click / Esc = close, right click = menu
+ *
+ * Ctrl+C makes snappin itself the owner of the CLIPBOARD selection with an
+ * image/png target, so this works:
+ *   xclip -o -sel clip -t image/png > image.png
+ * If the clipboard is still held when the last pin closes, snappin keeps
+ * serving it from a background process until something else is copied.
  */
 #define _DEFAULT_SOURCE
 #include <X11/Xlib.h>
@@ -27,11 +35,16 @@
 #include <time.h>
 #include <unistd.h>
 
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
+
 #define BORDER_RGB 0x3daee9
 #define FLASH_MS   400
 #define DCLICK_MS  350
 #define MAX_PINS   256
-#define MAX_PIXELS 40000000.0 /* 확대했을 때 이보다 크면 더 키우지 않는다 */
+#define MAX_PIXELS 40000000.0 /* do not zoom beyond this many pixels */
+#define MAX_XFERS  16          /* concurrent INCR clipboard transfers */
+#define XFER_TIMEOUT_MS 5000
 
 static Display *dpy;
 static Window root;
@@ -42,7 +55,7 @@ static XFontStruct *font;
 static Atom a_opacity;
 static Cursor cur_cross, cur_move;
 static unsigned long border_px;
-static long capture_at; /* 새 캡처 예약 시각(ms), 0 = 없음 */
+static long capture_at; /* scheduled time (ms) of a new capture, 0 = none */
 
 static long now_ms(void)
 {
@@ -53,7 +66,7 @@ static long now_ms(void)
 
 static int iround(double v) { return v < 0 ? (int)(v - 0.5) : (int)(v + 0.5); }
 
-/* ---------- 픽셀 값 <-> RGB ---------- */
+/* ---------- pixel value <-> RGB ---------- */
 
 typedef struct { unsigned long mask, max; int shift; } Chan;
 static Chan ch[3];
@@ -81,7 +94,7 @@ static void pixel_rgb(unsigned long p, unsigned char *out)
         out[i] = ch[i].max ? ((p & ch[i].mask) >> ch[i].shift) * 255 / ch[i].max : 0;
 }
 
-static unsigned long pixel_half(unsigned long p) /* 색을 절반 밝기로 */
+static unsigned long pixel_half(unsigned long p) /* half brightness */
 {
     unsigned long q = 0;
     for (int i = 0; i < 3; i++)
@@ -89,7 +102,7 @@ static unsigned long pixel_half(unsigned long p) /* 색을 절반 밝기로 */
     return q;
 }
 
-/* ---------- 글자 ---------- */
+/* ---------- text ---------- */
 
 static int text_w(const char *s) { return font ? XTextWidth(font, s, strlen(s)) : 6 * (int)strlen(s); }
 static int font_asc(void) { return font ? font->ascent : 10; }
@@ -101,87 +114,156 @@ static void draw_text(Drawable d, int x, int y, const char *s, unsigned fg)
     XDrawString(dpy, d, gc, x, y, s, strlen(s));
 }
 
-/* ---------- PNG (압축 없는 deflate) ---------- */
+/* ---------- PNG (stb_image_write) ---------- */
 
 typedef struct { int w, h; unsigned char *rgb; } Img;
 
-static unsigned long crc_tab[256];
+typedef struct { unsigned char *p; size_t len, cap; int fail; } Buf;
 
-static unsigned long crc32_upd(unsigned long c, const unsigned char *b, size_t n)
+static void buf_put(void *ctx, void *data, int n)
 {
-    if (!crc_tab[1])
-        for (unsigned long i = 0; i < 256; i++) {
-            unsigned long k = i;
-            for (int j = 0; j < 8; j++)
-                k = (k & 1) ? 0xedb88320UL ^ (k >> 1) : k >> 1;
-            crc_tab[i] = k;
+    Buf *b = ctx;
+    if (b->fail || n <= 0)
+        return;
+    if (b->len + n > b->cap) {
+        size_t cap = b->cap ? b->cap : 65536;
+        while (cap < b->len + n)
+            cap *= 2;
+        unsigned char *q = realloc(b->p, cap);
+        if (!q) {
+            b->fail = 1;
+            return;
         }
-    c ^= 0xffffffffUL;
-    while (n--)
-        c = crc_tab[(c ^ *b++) & 0xff] ^ (c >> 8);
-    return c ^ 0xffffffffUL;
+        b->p = q;
+        b->cap = cap;
+    }
+    memcpy(b->p + b->len, data, n);
+    b->len += n;
 }
 
-static void put32(unsigned char *p, unsigned long v)
+/* Encode to PNG in memory. Returns 0 on success; caller frees out->p. */
+static int png_mem(const Img *im, Buf *out)
 {
-    p[0] = v >> 24; p[1] = v >> 16; p[2] = v >> 8; p[3] = v;
-}
-
-static void png_chunk(FILE *f, const char *type, const unsigned char *data, size_t len)
-{
-    unsigned char b[4];
-    put32(b, len);
-    fwrite(b, 1, 4, f);
-    fwrite(type, 1, 4, f);
-    if (len)
-        fwrite(data, 1, len, f);
-    put32(b, crc32_upd(crc32_upd(0, (const unsigned char *)type, 4), data, len));
-    fwrite(b, 1, 4, f);
-}
-
-static int png_write(FILE *f, const Img *im)
-{
-    size_t row = (size_t)im->w * 3 + 1, raw = row * im->h;
-    unsigned char *r = malloc(raw), *z = malloc(raw + (raw / 65535 + 1) * 5 + 6), *p = z;
-    if (!r || !z) {
-        free(r); free(z);
+    memset(out, 0, sizeof *out);
+    if (!stbi_write_png_to_func(buf_put, out, im->w, im->h, 3, im->rgb, im->w * 3) || out->fail) {
+        free(out->p);
+        out->p = NULL;
         return -1;
     }
-    for (int y = 0; y < im->h; y++) {
-        r[y * row] = 0; /* 필터 없음 */
-        memcpy(r + y * row + 1, im->rgb + (size_t)y * im->w * 3, (size_t)im->w * 3);
-    }
-    *p++ = 0x78; *p++ = 0x01;
-    for (size_t off = 0; off < raw;) {
-        size_t n = raw - off > 65535 ? 65535 : raw - off;
-        *p++ = off + n == raw;
-        *p++ = n & 255; *p++ = n >> 8;
-        *p++ = ~n & 255; *p++ = (~n >> 8) & 255;
-        memcpy(p, r + off, n);
-        p += n; off += n;
-    }
-    unsigned long s1 = 1, s2 = 0;
-    for (size_t i = 0; i < raw;) {
-        size_t end = i + 5552 < raw ? i + 5552 : raw;
-        for (; i < end; i++) { s1 += r[i]; s2 += s1; }
-        s1 %= 65521; s2 %= 65521;
-    }
-    put32(p, (s2 << 16) | s1);
-    p += 4;
-
-    unsigned char hdr[13];
-    put32(hdr, im->w);
-    put32(hdr + 4, im->h);
-    hdr[8] = 8; hdr[9] = 2; hdr[10] = hdr[11] = hdr[12] = 0; /* 8비트 RGB */
-    fwrite("\x89PNG\r\n\x1a\n", 1, 8, f);
-    png_chunk(f, "IHDR", hdr, 13);
-    png_chunk(f, "IDAT", z, p - z);
-    png_chunk(f, "IEND", NULL, 0);
-    free(r); free(z);
-    return ferror(f) ? -1 : 0;
+    return 0;
 }
 
-/* ---------- 핀 ---------- */
+/* ---------- clipboard (we own the CLIPBOARD selection) ---------- */
+
+static Atom a_clipboard, a_targets, a_timestamp, a_png, a_incr;
+static Window clip_win;
+static size_t chunk_max;
+static struct { unsigned char *data; size_t len; Time time; int owned; } clip;
+
+/* INCR transfer, for data larger than one X request */
+typedef struct { Window req; Atom prop; unsigned char *data; size_t len, off; long last; } Xfer;
+static Xfer xfers[MAX_XFERS];
+static int nxfers;
+
+static void clip_drop(void)
+{
+    free(clip.data);
+    clip.data = NULL;
+    clip.len = 0;
+    clip.owned = 0;
+}
+
+static void xfer_end(int i)
+{
+    XSelectInput(dpy, xfers[i].req, NoEventMask);
+    free(xfers[i].data);
+    xfers[i] = xfers[--nxfers];
+}
+
+static int clip_set(const Img *im, Time t)
+{
+    Buf b;
+    if (png_mem(im, &b))
+        return 0;
+    free(clip.data);
+    clip.data = b.p;
+    clip.len = b.len;
+    clip.time = t;
+    XSetSelectionOwner(dpy, a_clipboard, clip_win, t);
+    clip.owned = XGetSelectionOwner(dpy, a_clipboard) == clip_win;
+    if (!clip.owned)
+        clip_drop();
+    return clip.owned;
+}
+
+static void clip_request(XSelectionRequestEvent *r)
+{
+    XSelectionEvent ev = { 0 };
+    ev.type = SelectionNotify;
+    ev.display = r->display;
+    ev.requestor = r->requestor;
+    ev.selection = r->selection;
+    ev.target = r->target;
+    ev.time = r->time;
+    ev.property = None;
+    Atom prop = r->property != None ? r->property : r->target; /* obsolete clients */
+
+    if (clip.owned && r->selection == a_clipboard) {
+        if (r->target == a_targets) {
+            Atom t[] = { a_targets, a_timestamp, a_png };
+            XChangeProperty(dpy, r->requestor, prop, XA_ATOM, 32, PropModeReplace, (unsigned char *)t, 3);
+            ev.property = prop;
+        } else if (r->target == a_timestamp) {
+            long v = (long)clip.time;
+            XChangeProperty(dpy, r->requestor, prop, XA_INTEGER, 32, PropModeReplace, (unsigned char *)&v, 1);
+            ev.property = prop;
+        } else if (r->target == a_png) {
+            if (clip.len <= chunk_max) {
+                XChangeProperty(dpy, r->requestor, prop, a_png, 8, PropModeReplace, clip.data, (int)clip.len);
+                ev.property = prop;
+            } else if (nxfers < MAX_XFERS) {
+                Xfer *x = &xfers[nxfers];
+                x->data = malloc(clip.len);
+                if (x->data) {
+                    memcpy(x->data, clip.data, clip.len);
+                    x->req = r->requestor;
+                    x->prop = prop;
+                    x->len = clip.len;
+                    x->off = 0;
+                    x->last = now_ms();
+                    nxfers++;
+                    /* the requestor deletes the property to ask for the next chunk */
+                    XSelectInput(dpy, r->requestor, PropertyChangeMask);
+                    long size = (long)clip.len;
+                    XChangeProperty(dpy, r->requestor, prop, a_incr, 32, PropModeReplace, (unsigned char *)&size, 1);
+                    ev.property = prop;
+                }
+            }
+        }
+    }
+    XSendEvent(dpy, r->requestor, False, NoEventMask, (XEvent *)&ev);
+}
+
+static int xfer_event(XPropertyEvent *e)
+{
+    if (e->state != PropertyDelete)
+        return 0;
+    for (int i = 0; i < nxfers; i++) {
+        Xfer *x = &xfers[i];
+        if (x->req != e->window || x->prop != e->atom)
+            continue;
+        size_t n = x->len - x->off < chunk_max ? x->len - x->off : chunk_max;
+        XChangeProperty(dpy, x->req, x->prop, a_png, 8, PropModeReplace, x->data + x->off, (int)n);
+        x->off += n;
+        x->last = now_ms();
+        if (n == 0) /* a zero-length chunk ends the transfer */
+            xfer_end(i);
+        return 1;
+    }
+    return 0;
+}
+
+/* ---------- pins ---------- */
 
 typedef struct {
     Window win;
@@ -215,7 +297,7 @@ static void pin_draw(Pin *p)
     XDrawRectangle(dpy, p->win, gc, 0, 0, p->w - 1, p->h - 1);
 }
 
-/* 지금 배율로 그림을 다시 만든다(쌍선형 보간) */
+/* Rebuild the pixmap at the current scale (bilinear) */
 static void pin_render(Pin *p)
 {
     const Img *s = &p->img;
@@ -307,7 +389,7 @@ static void pin_zoom(Pin *p, int rx, int ry, double f)
     if (s > 0.999 && s < 1.001) s = 1.0;
     if (s == p->scale || (double)p->img.w * s * p->img.h * s > MAX_PIXELS)
         return;
-    /* 마우스가 가리키는 점이 제자리에 있도록 위치도 옮긴다 */
+    /* keep the point under the mouse in place */
     double k = s / p->scale;
     p->x = iround(rx - (rx - p->x) * k);
     p->y = iround(ry - (ry - p->y) * k);
@@ -323,7 +405,7 @@ static void pin_reset(Pin *p)
 
 static void pin_fade(Pin *p, double step)
 {
-    /* 투명도는 컴포지터(창 효과)가 켜진 환경에서만 보인다 */
+    /* opacity is only visible with a compositor running */
     p->alpha += step;
     if (p->alpha < 0.2) p->alpha = 0.2;
     if (p->alpha > 0.999) p->alpha = 1.0;
@@ -342,16 +424,14 @@ static void pin_flash(Pin *p, unsigned rgb)
     pin_draw(p);
 }
 
-static void pin_copy(Pin *p)
+static void pin_copy(Pin *p, Time t)
 {
-    FILE *f = popen("xclip -selection clipboard -t image/png -i 2>/dev/null", "w");
-    int ok = 0;
-    if (f) {
-        png_write(f, &p->img);
-        ok = pclose(f) == 0;
-    }
-    if (!ok)
-        fprintf(stderr, "복사하려면 xclip 이 필요합니다: sudo apt install xclip\n");
+    int ok = clip_set(&p->img, t);
+    if (ok)
+        printf("Copied %dx%d PNG to the clipboard (image/png)\n", p->img.w, p->img.h);
+    else
+        fprintf(stderr, "Could not take the clipboard\n");
+    fflush(stdout);
     pin_flash(p, ok ? 0x00ff00 : 0xff0000);
 }
 
@@ -369,19 +449,16 @@ static void pin_save(Pin *p)
     strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", localtime(&t));
     snprintf(path, sizeof path, "%s/snappin-%s.png", dir, stamp);
 
-    FILE *f = fopen(path, "wb");
-    int ok = f && png_write(f, &p->img) == 0;
-    if (f && fclose(f))
-        ok = 0;
+    int ok = stbi_write_png(path, p->img.w, p->img.h, 3, p->img.rgb, p->img.w * 3) != 0;
     if (ok)
-        printf("저장: %s\n", path);
+        printf("Saved: %s\n", path);
     else
-        fprintf(stderr, "저장하지 못했습니다: %s\n", path);
+        fprintf(stderr, "Could not save: %s\n", path);
     fflush(stdout);
     pin_flash(p, ok ? 0x00ff00 : 0xff0000);
 }
 
-static void new_capture(void) { capture_at = now_ms() + 200; } /* 메뉴가 사라진 뒤에 찍는다 */
+static void new_capture(void) { capture_at = now_ms() + 200; } /* capture after the menu is gone */
 
 static void close_all(void)
 {
@@ -389,7 +466,7 @@ static void close_all(void)
         pin_close(pins[0]);
 }
 
-/* ---------- 오른쪽 클릭 메뉴 ---------- */
+/* ---------- right click menu ---------- */
 
 static const char *menu_label[] = { "Copy", "Save", "Actual size", "New capture", "Close", "Close all" };
 static const char *menu_key[] = { "Ctrl+C", "Ctrl+S", "1", "N", "Esc", "" };
@@ -478,12 +555,12 @@ static void menu_event(XEvent *e)
         break;
     case ButtonRelease: {
         int s = menu_hit(e->xbutton.x, e->xbutton.y);
-        if (s < 0 || e->xbutton.time - menu.opened < 250) /* 메뉴를 연 오른쪽 클릭을 뗀 것은 무시 */
+        if (s < 0 || e->xbutton.time - menu.opened < 250) /* ignore release of the opening click */
             break;
         Pin *p = menu.pin;
         menu_close();
         switch (s) {
-        case 0: pin_copy(p); break;
+        case 0: pin_copy(p, e->xbutton.time); break;
         case 1: pin_save(p); break;
         case 2: pin_reset(p); break;
         case 3: new_capture(); break;
@@ -534,7 +611,7 @@ static void pin_event(Pin *p, XEvent *e)
     }
     case MotionNotify:
         while (XCheckTypedWindowEvent(dpy, p->win, MotionNotify, e))
-            ; /* 가장 최근 위치만 쓴다 */
+            ; /* use only the latest position */
         p->x = e->xmotion.x_root - p->dx;
         p->y = e->xmotion.y_root - p->dy;
         XMoveWindow(dpy, p->win, p->x, p->y);
@@ -543,7 +620,7 @@ static void pin_event(Pin *p, XEvent *e)
         KeySym k = XLookupKeysym(&e->xkey, 0);
         int ctrl = e->xkey.state & ControlMask;
         if (k == XK_Escape) pin_close(p);
-        else if (ctrl && k == XK_c) pin_copy(p);
+        else if (ctrl && k == XK_c) pin_copy(p, e->xkey.time);
         else if (ctrl && k == XK_s) pin_save(p);
         else if (!ctrl && k == XK_1) pin_reset(p);
         else if (!ctrl && k == XK_n) new_capture();
@@ -552,7 +629,7 @@ static void pin_event(Pin *p, XEvent *e)
     }
 }
 
-/* ---------- 영역 고르기 ---------- */
+/* ---------- area selection ---------- */
 
 static struct {
     int active, pressing, box, sx, sy, x0, y0, x1, y1;
@@ -584,10 +661,10 @@ static void start_capture(void)
         return;
     XImage *shot = XGetImage(dpy, root, 0, 0, SW, SH, AllPlanes, ZPixmap);
     if (!shot) {
-        fprintf(stderr, "화면을 찍지 못했습니다. X11 세션인지 확인하세요.\n");
+        fprintf(stderr, "Could not grab the screen. Is this an X11 session?\n");
         return;
     }
-    /* 어둡게 한 사본 */
+    /* darkened copy */
     size_t n = (size_t)shot->bytes_per_line * SH;
     char *d = malloc(n);
     memcpy(d, shot->data, n);
@@ -626,7 +703,7 @@ static void start_capture(void)
     sel.active = 1;
     sel.pressing = sel.box = 0;
 
-    /* 키보드·마우스를 이 창으로 가져온다 */
+    /* grab keyboard and pointer */
     for (int i = 0; i < 40; i++) {
         if (XGrabPointer(dpy, sel.win, False, ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
                          GrabModeAsync, GrabModeAsync, None, cur_cross, CurrentTime) == GrabSuccess)
@@ -707,7 +784,7 @@ static void sel_event(XEvent *e)
         sel.pressing = 0;
         if (sel.box && sel.x1 - sel.x0 >= 3 && sel.y1 - sel.y0 >= 3) {
             sel_finish(1);
-        } else { /* 너무 작으면 다시 고르게 둔다 */
+        } else { /* too small: let the user select again */
             sel.box = 0;
             sel_draw();
         }
@@ -719,11 +796,11 @@ static void sel_event(XEvent *e)
     }
 }
 
-/* ---------- 시작 ---------- */
+/* ---------- main ---------- */
 
 static int on_xerror(Display *d, XErrorEvent *e)
 {
-    (void)d; (void)e; /* 이미 닫힌 창에 대한 요청 같은 것은 무시한다 */
+    (void)d; (void)e; /* ignore errors such as requests on already destroyed windows */
     return 0;
 }
 
@@ -732,7 +809,7 @@ int main(void)
     signal(SIGPIPE, SIG_IGN);
     dpy = XOpenDisplay(NULL);
     if (!dpy) {
-        fprintf(stderr, "X11 화면(DISPLAY)을 찾지 못했습니다. X11 세션에서 실행하세요.\n");
+        fprintf(stderr, "Cannot open the X11 display (DISPLAY). Run this in an X11 session.\n");
         return 1;
     }
     XSetErrorHandler(on_xerror);
@@ -743,7 +820,7 @@ int main(void)
     SW = DisplayWidth(dpy, scr);
     SH = DisplayHeight(dpy, scr);
     if (vis->class != TrueColor) {
-        fprintf(stderr, "트루컬러(24비트) 화면에서만 동작합니다.\n");
+        fprintf(stderr, "Only TrueColor (24-bit) displays are supported.\n");
         return 1;
     }
     chan_init(&ch[0], vis->red_mask);
@@ -761,15 +838,32 @@ int main(void)
     cur_cross = XCreateFontCursor(dpy, XC_crosshair);
     cur_move = XCreateFontCursor(dpy, XC_fleur);
 
+    a_clipboard = XInternAtom(dpy, "CLIPBOARD", False);
+    a_targets = XInternAtom(dpy, "TARGETS", False);
+    a_timestamp = XInternAtom(dpy, "TIMESTAMP", False);
+    a_png = XInternAtom(dpy, "image/png", False);
+    a_incr = XInternAtom(dpy, "INCR", False);
+    clip_win = XCreateSimpleWindow(dpy, root, -10, -10, 1, 1, 0, 0, 0);
+    chunk_max = (size_t)XMaxRequestSize(dpy) * 4 - 1024;
+    if (chunk_max > 256 * 1024)
+        chunk_max = 256 * 1024;
+
     start_capture();
 
-    int fd = ConnectionNumber(dpy);
+    int fd = ConnectionNumber(dpy), daemonized = 0;
     for (;;) {
         while (XPending(dpy)) {
             XEvent e;
             Pin *p;
             XNextEvent(dpy, &e);
-            if (sel.active && e.xany.window == sel.win)
+            if (e.type == SelectionRequest)
+                clip_request(&e.xselectionrequest);
+            else if (e.type == SelectionClear) {
+                if (e.xselectionclear.selection == a_clipboard)
+                    clip_drop();
+            } else if (e.type == PropertyNotify && xfer_event(&e.xproperty))
+                ;
+            else if (sel.active && e.xany.window == sel.win)
                 sel_event(&e);
             else if (menu.win && e.xany.window == menu.win)
                 menu_event(&e);
@@ -798,8 +892,30 @@ int main(void)
                 wait = p->flash_end - t;
             }
         }
-        if (!npins && !sel.active && !capture_at)
-            break; /* 떠 있는 그림을 모두 닫으면 끝 */
+        for (int i = nxfers - 1; i >= 0; i--) {
+            long left = xfers[i].last + XFER_TIMEOUT_MS - t;
+            if (left <= 0)
+                xfer_end(i); /* the requestor went away */
+            else if (wait < 0 || left < wait)
+                wait = left;
+        }
+        if (!npins && !sel.active && !capture_at) {
+            /* all pins are closed */
+            if (!clip.owned && !nxfers)
+                break;
+            if (!daemonized) {
+                /* keep serving the clipboard in the background, like xclip does */
+                daemonized = 1;
+                printf("Clipboard is kept by a background process until something else is copied.\n");
+                fflush(stdout);
+                XSync(dpy, False);
+                pid_t pid = fork();
+                if (pid > 0)
+                    _exit(0);
+                if (pid == 0)
+                    setsid();
+            }
+        }
         if (XPending(dpy))
             continue;
 
