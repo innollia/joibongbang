@@ -42,15 +42,16 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
-#define BORDER_RGB 0x3daee9
-#define FLASH_MS   400
-#define DCLICK_MS  350
-#define MAX_PINS   256
+#define BORDER_RGB 0x3daee9 /* pin border and selection frame color */
+#define FLASH_MS   400      /* how long the border flashes after copy/save */
+#define DCLICK_MS  350      /* max gap between clicks of a double click */
+#define MAX_PINS   256      /* max number of floating windows at once */
 #define MAX_PIXELS 40000000.0 /* do not zoom beyond this many pixels */
 #define MAX_XFERS  16          /* concurrent INCR clipboard transfers */
 #define XFER_TIMEOUT_MS 5000
 #define VERSION    "1.0"
 
+/* command line options */
 static struct {
     int pin, nosave, clipboard, quiet, full;
     const char *geometry, *output;
@@ -59,19 +60,21 @@ static struct {
 
 static char out_dir[4096];   /* where timestamped files go */
 static const char *out_file; /* explicit file name from -o (or "-"), used once */
-static int out_file_used, captured, exit_code;
+static int out_file_used, captured, exit_code; /* captured = number of captures taken */
 
+/* X11 state shared by the whole program */
 static Display *dpy;
 static Window root;
 static Visual *vis;
-static int depth, SW, SH;
+static int depth, SW, SH; /* color depth, screen width/height */
 static GC gc;
 static XFontStruct *font;
-static Atom a_opacity;
+static Atom a_opacity;  /* _NET_WM_WINDOW_OPACITY, read by compositors */
 static Cursor cur_cross, cur_move;
 static unsigned long border_px;
 static long capture_at; /* scheduled time (ms) of a new capture, 0 = none */
 
+/* wall clock in milliseconds */
 static long now_ms(void)
 {
     struct timeval tv;
@@ -79,6 +82,7 @@ static long now_ms(void)
     return tv.tv_sec * 1000L + tv.tv_usec / 1000;
 }
 
+/* round to the nearest int (halves away from zero) */
 static int iround(double v) { return v < 0 ? (int)(v - 0.5) : (int)(v + 0.5); }
 
 /* informational message on stderr, silenced by -q */
@@ -92,6 +96,7 @@ static void info(const char *fmt, ...)
     va_end(ap);
 }
 
+/* point fd at /dev/null (used to detach stdin/stdout/stderr) */
 static void null_fd(int fd)
 {
     int n = open("/dev/null", O_RDWR);
@@ -103,9 +108,13 @@ static void null_fd(int fd)
 
 /* ---------- pixel value <-> RGB ---------- */
 
+/* One color channel of a TrueColor visual: the bits of the pixel value it
+ * uses (mask), how far they are shifted, and the largest value (max).
+ * ch[0] = red, ch[1] = green, ch[2] = blue. */
 typedef struct { unsigned long mask, max; int shift; } Chan;
 static Chan ch[3];
 
+/* work out shift and max from a mask such as 0xff0000 */
 static void chan_init(Chan *c, unsigned long m)
 {
     c->mask = m;
@@ -114,6 +123,7 @@ static void chan_init(Chan *c, unsigned long m)
     c->max = m;
 }
 
+/* 0xRRGGBB -> pixel value for this display */
 static unsigned long rgb_pixel(unsigned rgb)
 {
     unsigned v[3] = { (rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255 };
@@ -123,6 +133,7 @@ static unsigned long rgb_pixel(unsigned rgb)
     return p;
 }
 
+/* pixel value -> 3 bytes R, G, B (each 0..255) */
 static void pixel_rgb(unsigned long p, unsigned char *out)
 {
     for (int i = 0; i < 3; i++)
@@ -133,16 +144,18 @@ static unsigned long pixel_half(unsigned long p) /* half brightness */
 {
     unsigned long q = 0;
     for (int i = 0; i < 3; i++)
-        q |= ((p & ch[i].mask) >> 1) & ch[i].mask;
+        q |= ((p & ch[i].mask) >> 1) & ch[i].mask; /* halve each channel in place */
     return q;
 }
 
 /* ---------- text ---------- */
 
+/* text helpers; fall back to rough sizes if no font could be loaded */
 static int text_w(const char *s) { return font ? XTextWidth(font, s, strlen(s)) : 6 * (int)strlen(s); }
 static int font_asc(void) { return font ? font->ascent : 10; }
 static int font_h(void) { return font ? font->ascent + font->descent : 13; }
 
+/* draw s with its baseline at y, in color fg (0xRRGGBB) */
 static void draw_text(Drawable d, int x, int y, const char *s, unsigned fg)
 {
     XSetForeground(dpy, gc, rgb_pixel(fg));
@@ -151,10 +164,13 @@ static void draw_text(Drawable d, int x, int y, const char *s, unsigned fg)
 
 /* ---------- PNG (stb_image_write) ---------- */
 
+/* a captured image: w*h pixels, 3 bytes (R, G, B) each, rows top to bottom */
 typedef struct { int w, h; unsigned char *rgb; } Img;
 
+/* growable byte buffer; fail is set if memory ran out */
 typedef struct { unsigned char *p; size_t len, cap; int fail; } Buf;
 
+/* stb write callback: append n bytes to the Buf in ctx */
 static void buf_put(void *ctx, void *data, int n)
 {
     Buf *b = ctx;
@@ -163,7 +179,7 @@ static void buf_put(void *ctx, void *data, int n)
     if (b->len + n > b->cap) {
         size_t cap = b->cap ? b->cap : 65536;
         while (cap < b->len + n)
-            cap *= 2;
+            cap *= 2; /* grow by doubling */
         unsigned char *q = realloc(b->p, cap);
         if (!q) {
             b->fail = 1;
@@ -188,6 +204,7 @@ static int png_mem(const Img *im, Buf *out)
     return 0;
 }
 
+/* write the image as PNG to stdout (-o -). 1 = ok */
 static int img_stdout(const Img *im)
 {
     Buf b;
@@ -210,6 +227,7 @@ static void unique_path(char *path, size_t n)
     time_t t = time(NULL);
     strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", localtime(&t));
     snprintf(path, n, "%s/snappin-%s.png", out_dir, stamp);
+    /* add -2, -3, ... when several captures land in the same second */
     for (int i = 2; access(path, F_OK) == 0 && i < 1000; i++)
         snprintf(path, n, "%s/snappin-%s-%d.png", out_dir, stamp, i);
 }
@@ -237,18 +255,31 @@ static int img_save(const Img *im)
     return 1;
 }
 
-/* ---------- clipboard (we own the CLIPBOARD selection) ---------- */
+/* ---------- clipboard (we own the CLIPBOARD selection) ----------
+ *
+ * X11 has no shared clipboard buffer. Copying means "owning" the CLIPBOARD
+ * selection: when another program pastes, the X server sends us a
+ * SelectionRequest and we write the data into a property on the requesting
+ * window, then reply with a SelectionNotify event. So the PNG has to stay in
+ * memory for as long as we own the selection.
+ */
 
 static Atom a_clipboard, a_targets, a_timestamp, a_png, a_incr, a_time;
-static Window clip_win;
-static size_t chunk_max;
+static Window clip_win;   /* hidden window that owns the selection */
+static size_t chunk_max;  /* largest property we write in one request */
+/* the PNG we are serving, and the time we took ownership */
 static struct { unsigned char *data; size_t len; Time time; int owned; } clip;
 
-/* INCR transfer, for data larger than one X request */
+/* INCR transfer, for data larger than one X request: the data is sent in
+ * chunks, one each time the requestor deletes the property. Each transfer keeps
+ * its own copy so it can finish even if the clipboard changes meanwhile.
+ * req/prop = where to write, off = bytes sent so far, last = time of the last
+ * chunk (for the timeout). */
 typedef struct { Window req; Atom prop; unsigned char *data; size_t len, off; long last; } Xfer;
 static Xfer xfers[MAX_XFERS];
 static int nxfers;
 
+/* forget the clipboard data (we no longer own the selection) */
 static void clip_drop(void)
 {
     free(clip.data);
@@ -257,6 +288,7 @@ static void clip_drop(void)
     clip.owned = 0;
 }
 
+/* stop transfer i and remove it from the list (order does not matter) */
 static void xfer_end(int i)
 {
     XSelectInput(dpy, xfers[i].req, NoEventMask);
@@ -264,7 +296,9 @@ static void xfer_end(int i)
     xfers[i] = xfers[--nxfers];
 }
 
-/* current X server time, for taking the selection without a user event */
+/* Current X server time, for taking the selection without a user event.
+ * Appending zero bytes to a property changes nothing but still produces a
+ * PropertyNotify event, which carries the server timestamp. */
 static Time server_time(void)
 {
     XEvent e;
@@ -273,6 +307,7 @@ static Time server_time(void)
     return e.xproperty.time;
 }
 
+/* encode the image and take ownership of CLIPBOARD. 1 = ok */
 static int clip_set(const Img *im, Time t)
 {
     Buf b;
@@ -283,12 +318,14 @@ static int clip_set(const Img *im, Time t)
     clip.len = b.len;
     clip.time = t;
     XSetSelectionOwner(dpy, a_clipboard, clip_win, t);
-    clip.owned = XGetSelectionOwner(dpy, a_clipboard) == clip_win;
+    clip.owned = XGetSelectionOwner(dpy, a_clipboard) == clip_win; /* check it really worked */
     if (!clip.owned)
         clip_drop();
     return clip.owned;
 }
 
+/* Answer a paste request. Supported targets: TARGETS (list of formats we offer),
+ * TIMESTAMP and image/png. Anything else is refused (property = None). */
 static void clip_request(XSelectionRequestEvent *r)
 {
     XSelectionEvent ev = { 0 };
@@ -311,10 +348,10 @@ static void clip_request(XSelectionRequestEvent *r)
             XChangeProperty(dpy, r->requestor, prop, XA_INTEGER, 32, PropModeReplace, (unsigned char *)&v, 1);
             ev.property = prop;
         } else if (r->target == a_png) {
-            if (clip.len <= chunk_max) {
+            if (clip.len <= chunk_max) { /* small enough: send it all at once */
                 XChangeProperty(dpy, r->requestor, prop, a_png, 8, PropModeReplace, clip.data, (int)clip.len);
                 ev.property = prop;
-            } else if (nxfers < MAX_XFERS) {
+            } else if (nxfers < MAX_XFERS) { /* too big: start an INCR transfer */
                 Xfer *x = &xfers[nxfers];
                 x->data = malloc(clip.len);
                 if (x->data) {
@@ -327,6 +364,7 @@ static void clip_request(XSelectionRequestEvent *r)
                     nxfers++;
                     /* the requestor deletes the property to ask for the next chunk */
                     XSelectInput(dpy, r->requestor, PropertyChangeMask);
+                    /* writing an INCR property (holding the total size) starts the transfer */
                     long size = (long)clip.len;
                     XChangeProperty(dpy, r->requestor, prop, a_incr, 32, PropModeReplace, (unsigned char *)&size, 1);
                     ev.property = prop;
@@ -334,9 +372,12 @@ static void clip_request(XSelectionRequestEvent *r)
             }
         }
     }
+    /* tell the requestor we are done (property = None means refused) */
     XSendEvent(dpy, r->requestor, False, NoEventMask, (XEvent *)&ev);
 }
 
+/* A property was deleted: if it belongs to an INCR transfer, the requestor has
+ * read the last chunk, so send the next one. Returns 1 if the event was ours. */
 static int xfer_event(XPropertyEvent *e)
 {
     if (e->state != PropertyDelete)
@@ -358,23 +399,27 @@ static int xfer_event(XPropertyEvent *e)
 
 /* ---------- pins ---------- */
 
+/* a floating window showing one capture */
 typedef struct {
     Window win;
-    Pixmap pm;
-    Img img;
-    int x, y, w, h, dx, dy;
-    double scale, alpha;
-    unsigned long border;
-    long flash_end;
-    Time last_click;
+    Pixmap pm;              /* the image drawn at the current scale */
+    Img img;                /* original pixels (copy/save always use these) */
+    int x, y, w, h, dx, dy; /* window position and size; dx/dy = grab offset while dragging */
+    double scale, alpha;    /* zoom factor, opacity */
+    unsigned long border;   /* current border color (changes while flashing) */
+    long flash_end;         /* when the flash ends (ms), 0 = not flashing */
+    Time last_click;        /* for double click detection */
 } Pin;
 
 static Pin *pins[MAX_PINS];
 static int npins;
 
 static void menu_close(void);
+/* the right click menu (at most one open): which pin it belongs to, the
+ * highlighted item, width, item height and when it was opened */
 static struct { Window win; Pin *pin; int sel, w, ih; Time opened; } menu;
 
+/* the pin that owns window w, or NULL */
 static Pin *pin_find(Window w)
 {
     for (int i = 0; i < npins; i++)
@@ -383,6 +428,7 @@ static Pin *pin_find(Window w)
     return NULL;
 }
 
+/* copy the pixmap to the window and draw a 1 px border */
 static void pin_draw(Pin *p)
 {
     XCopyArea(dpy, p->pm, p->win, gc, 0, 0, p->w, p->h, 0, 0);
@@ -390,7 +436,9 @@ static void pin_draw(Pin *p)
     XDrawRectangle(dpy, p->win, gc, 0, 0, p->w - 1, p->h - 1);
 }
 
-/* Rebuild the pixmap at the current scale (bilinear) */
+/* Rebuild the pixmap at the current scale (bilinear) and resize the window.
+ * Fixed point math: positions are in 1/256 pixel units, so fx >> 8 is the
+ * source pixel and fx & 255 is the weight of its right neighbour. */
 static void pin_render(Pin *p)
 {
     const Img *s = &p->img;
@@ -400,6 +448,7 @@ static void pin_render(Pin *p)
     XImage *xi = XCreateImage(dpy, vis, depth, ZPixmap, 0, NULL, w, h, 32, 0);
     xi->data = malloc((size_t)xi->bytes_per_line * h);
     for (int y = 0; y < h; y++) {
+        /* center of output row y mapped into the source, minus half a pixel */
         long fy = (long)(2 * y + 1) * s->h * 128 / h - 128;
         if (fy < 0) fy = 0;
         int y0 = fy >> 8, ty = fy & 255, y1 = y0 + 1 < s->h ? y0 + 1 : y0;
@@ -407,6 +456,7 @@ static void pin_render(Pin *p)
             long fx = (long)(2 * x + 1) * s->w * 128 / w - 128;
             if (fx < 0) fx = 0;
             int x0 = fx >> 8, tx = fx & 255, x1 = x0 + 1 < s->w ? x0 + 1 : x0;
+            /* the 4 source pixels around the point: a b / c d */
             const unsigned char *a = s->rgb + ((size_t)y0 * s->w + x0) * 3,
                                 *b = s->rgb + ((size_t)y0 * s->w + x1) * 3,
                                 *c = s->rgb + ((size_t)y1 * s->w + x0) * 3,
@@ -414,7 +464,7 @@ static void pin_render(Pin *p)
             unsigned v = 0;
             for (int i = 0; i < 3; i++) {
                 unsigned top = a[i] * (256 - tx) + b[i] * tx, bot = c[i] * (256 - tx) + d[i] * tx;
-                v = v << 8 | ((top * (256 - ty) + bot * ty) >> 16);
+                v = v << 8 | ((top * (256 - ty) + bot * ty) >> 16); /* /256/256 */
             }
             XPutPixel(xi, x, y, rgb_pixel(v));
         }
@@ -430,6 +480,7 @@ static void pin_render(Pin *p)
     pin_draw(p);
 }
 
+/* create a floating window for img at screen position x, y; takes ownership of img */
 static void pin_new(Img img, int x, int y)
 {
     if (npins == MAX_PINS) {
@@ -444,8 +495,8 @@ static void pin_new(Img img, int x, int y)
     p->border = border_px;
 
     XSetWindowAttributes a = { 0 };
-    a.override_redirect = True;
-    a.background_pixmap = None;
+    a.override_redirect = True; /* no window manager frame, stays exactly where we put it */
+    a.background_pixmap = None; /* do not clear before redraw, avoids flicker */
     a.cursor = cur_move;
     a.event_mask = ExposureMask | ButtonPressMask | ButtonReleaseMask | Button1MotionMask |
                    KeyPressMask | EnterWindowMask;
@@ -459,6 +510,7 @@ static void pin_new(Img img, int x, int y)
     XMapRaised(dpy, p->win);
 }
 
+/* destroy a pin and free everything it holds */
 static void pin_close(Pin *p)
 {
     if (menu.win && menu.pin == p)
@@ -474,12 +526,13 @@ static void pin_close(Pin *p)
     free(p);
 }
 
+/* multiply the zoom by f around the screen point rx, ry (limits: 0.1x .. 8x) */
 static void pin_zoom(Pin *p, int rx, int ry, double f)
 {
     double s = p->scale * f;
     if (s < 0.1) s = 0.1;
     if (s > 8.0) s = 8.0;
-    if (s > 0.999 && s < 1.001) s = 1.0;
+    if (s > 0.999 && s < 1.001) s = 1.0; /* snap to exactly 1x after rounding errors */
     if (s == p->scale || (double)p->img.w * s * p->img.h * s > MAX_PIXELS)
         return;
     /* keep the point under the mouse in place */
@@ -490,12 +543,14 @@ static void pin_zoom(Pin *p, int rx, int ry, double f)
     pin_render(p);
 }
 
+/* back to 1x (key 1) */
 static void pin_reset(Pin *p)
 {
     p->scale = 1.0;
     pin_render(p);
 }
 
+/* change opacity by step (0.2 .. 1.0) */
 static void pin_fade(Pin *p, double step)
 {
     /* opacity is only visible with a compositor running */
@@ -505,11 +560,13 @@ static void pin_fade(Pin *p, double step)
     if (p->alpha == 1.0) {
         XDeleteProperty(dpy, p->win, a_opacity);
     } else {
+        /* 32-bit properties are passed as long in Xlib; 0xffffffff = fully opaque */
         unsigned long v = (unsigned long)(p->alpha * 0xffffffffUL);
         XChangeProperty(dpy, p->win, a_opacity, XA_CARDINAL, 32, PropModeReplace, (unsigned char *)&v, 1);
     }
 }
 
+/* briefly color the border (green = ok, red = failed); the main loop restores it */
 static void pin_flash(Pin *p, unsigned rgb)
 {
     p->border = rgb_pixel(rgb);
@@ -517,6 +574,7 @@ static void pin_flash(Pin *p, unsigned rgb)
     pin_draw(p);
 }
 
+/* copy to the clipboard and report it. t = time of the user event (or server time) */
 static int img_copy(const Img *im, Time t)
 {
     int ok = clip_set(im, t);
@@ -550,6 +608,7 @@ static void deliver(Img im, int x, int y)
 
 static void new_capture(void) { capture_at = now_ms() + 200; } /* capture after the menu is gone */
 
+/* close every pin (menu: Close all) */
 static void close_all(void)
 {
     while (npins)
@@ -558,10 +617,12 @@ static void close_all(void)
 
 /* ---------- right click menu ---------- */
 
+/* menu items and their shortcut labels; the order matches menu_event() */
 static const char *menu_label[] = { "Copy", "Save", "Actual size", "New capture", "Close", "Close all" };
 static const char *menu_key[] = { "Ctrl+C", "Ctrl+S", "1", "N", "Esc", "" };
 #define MENU_N 6
 
+/* draw all items, the highlighted one with the border color */
 static void menu_draw(void)
 {
     XSetForeground(dpy, gc, rgb_pixel(0x2b2b2b));
@@ -581,6 +642,7 @@ static void menu_draw(void)
     XDrawRectangle(dpy, menu.win, gc, 0, 0, menu.w - 1, menu.ih * MENU_N - 1);
 }
 
+/* open the menu for pin p at screen position rx, ry */
 static void menu_open(Pin *p, int rx, int ry, Time t)
 {
     int lw = 0, kw = 0;
@@ -594,6 +656,7 @@ static void menu_open(Pin *p, int rx, int ry, Time t)
     menu.pin = p;
     menu.opened = t;
     int h = menu.ih * MENU_N;
+    /* keep the menu on screen */
     if (rx + menu.w > SW) rx = SW - menu.w;
     if (ry + h > SH) ry = SH - h;
 
@@ -605,6 +668,7 @@ static void menu_open(Pin *p, int rx, int ry, Time t)
                              CopyFromParent, CWOverrideRedirect | CWBackPixmap | CWEventMask, &a);
     XMapRaised(dpy, menu.win);
     XSync(dpy, False);
+    /* grab input so a click anywhere else closes the menu */
     XGrabPointer(dpy, menu.win, False, ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
                  GrabModeAsync, GrabModeAsync, None, None, CurrentTime);
     XGrabKeyboard(dpy, menu.win, False, GrabModeAsync, GrabModeAsync, CurrentTime);
@@ -619,11 +683,13 @@ static void menu_close(void)
     menu.win = 0;
 }
 
+/* index of the item at x, y (menu coordinates), or -1 */
 static int menu_hit(int x, int y)
 {
     return x >= 0 && x < menu.w && y >= 0 && y < menu.ih * MENU_N ? y / menu.ih : -1;
 }
 
+/* events for the menu window: hover highlights, release on an item runs it */
 static void menu_event(XEvent *e)
 {
     switch (e->type) {
@@ -641,7 +707,7 @@ static void menu_event(XEvent *e)
     }
     case ButtonPress:
         if (menu_hit(e->xbutton.x, e->xbutton.y) < 0)
-            menu_close();
+            menu_close(); /* clicked outside */
         break;
     case ButtonRelease: {
         int s = menu_hit(e->xbutton.x, e->xbutton.y);
@@ -666,6 +732,7 @@ static void menu_event(XEvent *e)
     }
 }
 
+/* events for a pin window: mouse and keyboard controls */
 static void pin_event(Pin *p, XEvent *e)
 {
     switch (e->type) {
@@ -674,6 +741,7 @@ static void pin_event(Pin *p, XEvent *e)
             pin_draw(p);
         break;
     case EnterNotify:
+        /* override-redirect windows never get focus from the WM, so take it on hover */
         XSetInputFocus(dpy, p->win, RevertToPointerRoot, CurrentTime);
         break;
     case ButtonPress: {
@@ -685,21 +753,22 @@ static void pin_event(Pin *p, XEvent *e)
                 return;
             }
             p->last_click = b->time;
+            /* remember where inside the window we grabbed it, for dragging */
             p->dx = b->x_root - p->x;
             p->dy = b->y_root - p->y;
             XRaiseWindow(dpy, p->win);
         } else if (b->button == Button3) {
             menu_open(p, b->x_root, b->y_root, b->time);
-        } else if (b->button == Button4) {
+        } else if (b->button == Button4) { /* wheel up */
             if (ctrl) pin_fade(p, 0.1);
             else pin_zoom(p, b->x_root, b->y_root, 1.1);
-        } else if (b->button == Button5) {
+        } else if (b->button == Button5) { /* wheel down */
             if (ctrl) pin_fade(p, -0.1);
             else pin_zoom(p, b->x_root, b->y_root, 1 / 1.1);
         }
         break;
     }
-    case MotionNotify:
+    case MotionNotify: /* only arrives while button 1 is held (Button1MotionMask) */
         while (XCheckTypedWindowEvent(dpy, p->win, MotionNotify, e))
             ; /* use only the latest position */
         p->x = e->xmotion.x_root - p->dx;
@@ -707,7 +776,7 @@ static void pin_event(Pin *p, XEvent *e)
         XMoveWindow(dpy, p->win, p->x, p->y);
         break;
     case KeyPress: {
-        KeySym k = XLookupKeysym(&e->xkey, 0);
+        KeySym k = XLookupKeysym(&e->xkey, 0); /* index 0 = ignore Shift, so 'c' not 'C' */
         int ctrl = e->xkey.state & ControlMask;
         if (k == XK_Escape) pin_close(p);
         else if (ctrl && k == XK_c) pin_copy(p, e->xkey.time);
@@ -719,15 +788,25 @@ static void pin_event(Pin *p, XEvent *e)
     }
 }
 
-/* ---------- area selection ---------- */
+/* ---------- area selection ----------
+ *
+ * The whole screen is grabbed once, then shown frozen and darkened in a
+ * fullscreen window. The selected box is drawn from the original bright copy.
+ * The final image is cut from the same frozen shot, so what you see while
+ * selecting is exactly what you get.
+ */
 
 static struct {
-    int active, pressing, box, sx, sy, x0, y0, x1, y1;
-    Window win;
-    Pixmap orig, dark, back;
-    XImage *shot;
+    int active, pressing, box; /* selecting now / button held / box is non-empty */
+    int sx, sy;                /* where the drag started */
+    int x0, y0, x1, y1;        /* current box, x0 <= x1, y0 <= y1 (x1, y1 exclusive) */
+    Window win;                /* fullscreen selection window */
+    Pixmap orig, dark, back;   /* bright screen, darkened screen, back buffer */
+    XImage *shot;              /* the frozen screen pixels */
 } sel;
 
+/* redraw: dark screen, bright box, frame and a "W x H" label, via the back
+ * buffer so it does not flicker */
 static void sel_draw(void)
 {
     XCopyArea(dpy, sel.dark, sel.back, gc, 0, 0, SW, SH, 0, 0);
@@ -738,13 +817,15 @@ static void sel_draw(void)
         XSetForeground(dpy, gc, border_px);
         XDrawRectangle(dpy, sel.back, gc, sel.x0 - 1, sel.y0 - 1, w + 1, h + 1);
         snprintf(t, sizeof t, "%d x %d", w, h);
+        /* label above the box, or below it if there is no room */
         int ly = sel.y0 > font_h() + 8 ? sel.y0 - 6 : sel.y1 + font_asc() + 6;
-        draw_text(sel.back, sel.x0 + 1, ly + 1, t, 0x000000);
+        draw_text(sel.back, sel.x0 + 1, ly + 1, t, 0x000000); /* shadow */
         draw_text(sel.back, sel.x0, ly, t, 0xffffff);
     }
     XCopyArea(dpy, sel.back, sel.win, gc, 0, 0, SW, SH, 0, 0);
 }
 
+/* copy a w*h area at x0, y0 of an XImage into a new RGB Img */
 static Img img_from(XImage *xi, int x0, int y0, int w, int h)
 {
     Img im = { w, h, malloc((size_t)w * h * 3) };
@@ -754,6 +835,7 @@ static Img img_from(XImage *xi, int x0, int y0, int w, int h)
     return im;
 }
 
+/* freeze the screen and show the selection window */
 static void start_capture(void)
 {
     if (sel.active)
@@ -771,6 +853,8 @@ static void start_capture(void)
     XImage *dark = XCreateImage(dpy, vis, shot->depth, ZPixmap, 0, d, SW, SH, shot->bitmap_pad, shot->bytes_per_line);
     uint16_t one = 1;
     int host_lsb = *(unsigned char *)&one == 1;
+    /* fast path: 32-bit pixels in host byte order can be edited directly;
+     * otherwise use the slow but general XGetPixel/XPutPixel */
     if (dark->bits_per_pixel == 32 && (dark->byte_order == LSBFirst) == host_lsb) {
         for (int y = 0; y < SH; y++) {
             uint32_t *row = (uint32_t *)(dark->data + (size_t)y * dark->bytes_per_line);
@@ -783,6 +867,7 @@ static void start_capture(void)
                 XPutPixel(dark, x, y, pixel_half(XGetPixel(dark, x, y)));
     }
 
+    /* upload both versions to the server once; redraws are then cheap copies */
     sel.orig = XCreatePixmap(dpy, root, SW, SH, depth);
     sel.dark = XCreatePixmap(dpy, root, SW, SH, depth);
     sel.back = XCreatePixmap(dpy, root, SW, SH, depth);
@@ -793,7 +878,7 @@ static void start_capture(void)
 
     XSetWindowAttributes a = { 0 };
     a.override_redirect = True;
-    a.background_pixmap = sel.dark;
+    a.background_pixmap = sel.dark; /* shown at once, before the first redraw */
     a.cursor = cur_cross;
     a.event_mask = ExposureMask | ButtonPressMask | ButtonReleaseMask | PointerMotionMask | KeyPressMask;
     sel.win = XCreateWindow(dpy, root, 0, 0, SW, SH, 0, CopyFromParent, InputOutput, CopyFromParent,
@@ -803,7 +888,8 @@ static void start_capture(void)
     sel.active = 1;
     sel.pressing = sel.box = 0;
 
-    /* grab keyboard and pointer */
+    /* grab keyboard and pointer; retry for up to 1 s because the key or menu
+     * that started us may still hold a grab */
     for (int i = 0; i < 40; i++) {
         if (XGrabPointer(dpy, sel.win, False, ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
                          GrabModeAsync, GrabModeAsync, None, cur_cross, CurrentTime) == GrabSuccess)
@@ -818,6 +904,7 @@ static void start_capture(void)
     sel_draw();
 }
 
+/* close the selection screen; take = 1 delivers the box, 0 cancels */
 static void sel_finish(int take)
 {
     XUngrabPointer(dpy, CurrentTime);
@@ -833,7 +920,7 @@ static void sel_finish(int take)
     } else {
         info("Cancelled\n");
         if (!captured)
-            exit_code = 1;
+            exit_code = 1; /* cancelling the very first capture is a failure */
     }
     XDestroyImage(sel.shot);
 }
@@ -851,6 +938,7 @@ static void grab_rect(int x, int y, int w, int h)
     XDestroyImage(xi);
 }
 
+/* the pointer is at x, y: update the box between it and the start point */
 static void sel_update(int x, int y)
 {
     if (x < 0) x = 0;
@@ -864,6 +952,7 @@ static void sel_update(int x, int y)
     sel.box = sel.x1 > sel.x0 && sel.y1 > sel.y0;
 }
 
+/* events for the selection window */
 static void sel_event(XEvent *e)
 {
     switch (e->type) {
@@ -886,7 +975,7 @@ static void sel_event(XEvent *e)
         if (!sel.pressing)
             break;
         while (XCheckTypedWindowEvent(dpy, sel.win, MotionNotify, e))
-            ;
+            ; /* use only the latest position */
         sel_update(e->xmotion.x, e->xmotion.y);
         sel_draw();
         break;
@@ -917,6 +1006,7 @@ static int on_xerror(Display *d, XErrorEvent *e)
     return 0;
 }
 
+/* --help text */
 static void usage(FILE *f)
 {
     fputs(
@@ -956,13 +1046,19 @@ static void usage(FILE *f)
 "  snappin -o - | convert - out.jpg    PNG to stdout\n", f);
 }
 
+/* print a usage error and return exit status 2 */
 static int bad_usage(const char *msg, const char *arg)
 {
     fprintf(stderr, "snappin: %s%s%s\nTry 'snappin --help'.\n", msg, arg ? ": " : "", arg ? arg : "");
     return 2;
 }
 
-/* fill out_dir / out_file from -o */
+/* Fill out_dir / out_file from -o:
+ *   none      -> timestamped files in .
+ *   -         -> stdout
+ *   dir/ or an existing directory -> timestamped files there (created if needed)
+ *   anything else -> that file name; later saves (Ctrl+S) go next to it
+ * Returns 0 = ok, otherwise an exit status. */
 static int setup_output(void)
 {
     const char *o = opt.output;
@@ -983,7 +1079,7 @@ static int setup_output(void)
         return bad_usage("--output path too long", NULL);
     if (o[n - 1] == '/' || (stat(o, &st) == 0 && S_ISDIR(st.st_mode))) {
         strcpy(out_dir, o);
-        while (n > 1 && out_dir[n - 1] == '/')
+        while (n > 1 && out_dir[n - 1] == '/') /* strip trailing slashes, keep "/" */
             out_dir[--n] = 0;
         if (mkdir(out_dir, 0755) && errno != EEXIST) {
             fprintf(stderr, "snappin: cannot create directory: %s\n", out_dir);
@@ -992,6 +1088,7 @@ static int setup_output(void)
         return 0;
     }
     out_file = o;
+    /* out_dir = the directory part of the file name */
     strcpy(out_dir, o);
     char *s = strrchr(out_dir, '/');
     if (!s)
@@ -1018,6 +1115,7 @@ int main(int argc, char **argv)
         { "version", no_argument, 0, 'V' },
         { 0, 0, 0, 0 }
     };
+    /* parse options */
     int c;
     char *end;
     while ((c = getopt_long(argc, argv, "g:fo:ncpd:qhV", longopts, NULL)) != -1) {
@@ -1049,6 +1147,7 @@ int main(int argc, char **argv)
     if (r)
         return r;
 
+    /* a closed pipe on stdout (-o -) should be an error we report, not a crash */
     signal(SIGPIPE, SIG_IGN);
     dpy = XOpenDisplay(NULL);
     if (!dpy) {
@@ -1056,6 +1155,7 @@ int main(int argc, char **argv)
         return 1;
     }
     XSetErrorHandler(on_xerror);
+    /* screen and color format */
     int scr = DefaultScreen(dpy);
     root = RootWindow(dpy, scr);
     vis = DefaultVisual(dpy, scr);
@@ -1071,6 +1171,7 @@ int main(int argc, char **argv)
     chan_init(&ch[2], vis->blue_mask);
     border_px = rgb_pixel(BORDER_RGB);
 
+    /* drawing resources: one GC for everything, a small fixed font, cursors */
     gc = XCreateGC(dpy, root, 0, NULL);
     font = XLoadQueryFont(dpy, "-misc-fixed-bold-r-normal--13-*-*-*-*-*-iso8859-1");
     if (!font)
@@ -1081,6 +1182,8 @@ int main(int argc, char **argv)
     cur_cross = XCreateFontCursor(dpy, XC_crosshair);
     cur_move = XCreateFontCursor(dpy, XC_fleur);
 
+    /* clipboard setup: atoms, a hidden owner window, and the chunk size
+     * (max request size is in 4-byte units; leave room for the header) */
     a_clipboard = XInternAtom(dpy, "CLIPBOARD", False);
     a_targets = XInternAtom(dpy, "TARGETS", False);
     a_timestamp = XInternAtom(dpy, "TIMESTAMP", False);
@@ -1100,6 +1203,7 @@ int main(int argc, char **argv)
         int m = XParseGeometry(opt.geometry, &gx, &gy, &w, &h);
         if (!(m & WidthValue) || !(m & HeightValue) || !w || !h)
             return bad_usage("bad --geometry (want WxH+X+Y)", opt.geometry);
+        /* cap huge sizes first so the int math below cannot overflow */
         gw = w > (unsigned)SW * 2 ? SW * 2 : (int)w;
         gh = h > (unsigned)SH * 2 ? SH * 2 : (int)h;
         if (m & XNegative) gx += SW - gw;
@@ -1114,27 +1218,33 @@ int main(int argc, char **argv)
         }
     }
 
+    /* --delay; nanosleep may be interrupted, so continue with the remaining time */
     if (opt.delay > 0) {
         struct timespec ts = { (time_t)opt.delay, (long)((opt.delay - (time_t)opt.delay) * 1e9) };
         while (nanosleep(&ts, &ts) && errno == EINTR)
             ;
     }
+    /* first capture: fixed area right away, or the interactive selection */
     if (opt.geometry || opt.full)
         grab_rect(gx, gy, gw, gh);
     else
         start_capture();
 
+    /* Main loop: handle all queued X events, then run timers (new capture,
+     * border flashes, INCR timeouts), then sleep in select() until the next X
+     * event or timer. Exits when nothing is left to do. */
     int fd = ConnectionNumber(dpy), daemonized = 0;
     for (;;) {
         while (XPending(dpy)) {
             XEvent e;
             Pin *p;
             XNextEvent(dpy, &e);
+            /* clipboard events first, then route by window */
             if (e.type == SelectionRequest)
                 clip_request(&e.xselectionrequest);
             else if (e.type == SelectionClear) {
                 if (e.xselectionclear.selection == a_clipboard)
-                    clip_drop();
+                    clip_drop(); /* someone else copied something */
             } else if (e.type == PropertyNotify && xfer_event(&e.xproperty))
                 ;
             else if (sel.active && e.xany.window == sel.win)
@@ -1145,6 +1255,7 @@ int main(int argc, char **argv)
                 pin_event(p, &e);
         }
 
+        /* timers; wait = ms until the next one, -1 = none */
         long t = now_ms(), wait = -1;
         if (capture_at) {
             if (t >= capture_at) {
@@ -1176,7 +1287,7 @@ int main(int argc, char **argv)
         if (!npins && !sel.active && !capture_at) {
             /* all pins are closed */
             if (!clip.owned && !nxfers)
-                break;
+                break; /* nothing to serve: done */
             if (!daemonized) {
                 /* keep serving the clipboard in the background, like xclip does */
                 daemonized = 1;
@@ -1185,9 +1296,9 @@ int main(int argc, char **argv)
                 XSync(dpy, False);
                 pid_t pid = fork();
                 if (pid > 0)
-                    _exit(exit_code);
+                    _exit(exit_code); /* parent returns to the shell; the child keeps the X connection */
                 if (pid == 0) {
-                    setsid();
+                    setsid(); /* leave the terminal's session so closing it does not kill us */
                     /* let $(snappin ...) and pipes finish */
                     null_fd(0);
                     null_fd(1);
@@ -1201,6 +1312,7 @@ int main(int argc, char **argv)
         fd_set fds;
         FD_ZERO(&fds);
         FD_SET(fd, &fds);
+        /* sleep until X has data or the next timer is due */
         struct timeval tv = { wait / 1000, (wait % 1000) * 1000 };
         select(fd + 1, &fds, NULL, NULL, wait >= 0 ? &tv : NULL);
     }
