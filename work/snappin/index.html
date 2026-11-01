@@ -10,7 +10,7 @@ table{border-collapse:collapse}td{border-bottom:1px solid #333;padding:4px 12px 
 </style>
 <p><a href="../../">← 목록</a></p>
 <h1>snappin</h1>
-<p>X11에서 드래그(또는 <code>--geometry</code>)로 화면 일부를 찍어 PNG로 저장하는 C 프로그램입니다. <code>--pin</code>을 주면 찍은 그림이 <b>찍은 그 자리에</b> 테두리 없는 창으로 떠 있습니다(항상 위). 주석과 출력은 영어입니다.</p>
+<p>X11에서 드래그(또는 <code>--geometry</code>)로 화면 일부를 찍어 PNG로 저장하는 C 프로그램입니다. <code>--pin</code>을 주면 찍은 그림이 <b>찍은 그 자리에</b> 테두리 없는 창으로 떠 있습니다(항상 위, 한 번에 한 장). 주석과 출력은 영어입니다.</p>
 <p><a class="btn" href="snappin.c" download>snappin.c 받기</a></p>
 
 <h2>빌드</h2>
@@ -56,13 +56,10 @@ snappin -o - | convert - out.jpg     # PNG를 표준 출력으로</pre>
 <tr><td colspan=2><b>떠 있는 그림 (<code>-p</code>)</b></td></tr>
 <tr><td>드래그</td><td>옮기기</td></tr>
 <tr><td>휠</td><td>확대 / 축소</td></tr>
-<tr><td>Ctrl + 휠</td><td>투명도 (창 효과가 켜진 환경에서만)</td></tr>
+<tr><td>1</td><td>원래 크기</td></tr>
 <tr><td>Ctrl+C</td><td>클립보드에 복사</td></tr>
 <tr><td>Ctrl+S</td><td><code>-o</code> 위치에 PNG로 저장</td></tr>
-<tr><td>1</td><td>원래 크기</td></tr>
-<tr><td>N</td><td>새 캡처 (여러 장 띄우기)</td></tr>
 <tr><td>더블클릭 / Esc</td><td>닫기</td></tr>
-<tr><td>오른쪽 클릭</td><td>메뉴</td></tr>
 </table>
 
 <h2>참고</h2>
@@ -75,6 +72,7 @@ snappin -o - | convert - out.jpg     # PNG를 표준 출력으로</pre>
 <h2 id="변경-기록">변경 기록</h2>
 <p>최신이 위입니다. 시간은 한국 시간. 바뀐 코드는 <a href="https://github.com/innollia/joibongbang/commits/main/work/snappin">GitHub 커밋 기록</a>에서 볼 수 있습니다.</p>
 <table>
+<tr><td>2026-11-01 19:30</td><td><b>1.1 — 코드 간략화</b> — 1321줄 → 830줄. 띄운 그림을 한 장만 다루게 하고, 곁가지 기능(오른쪽 클릭 메뉴, Ctrl+휠 투명도, N 새 캡처, 복사·저장 때 테두리 반짝임)을 뺌. 이벤트 처리를 한 함수(<code>next_event</code>)로 모으고, 클립보드 응답·창 만들기·화면 어둡게 하기를 짧게 정리. 옵션과 나머지 동작은 그대로. 처음으로 컴파일러(zig cc, <code>-Wall -Wextra</code>)로 경고 없이 컴파일되는 것을 확인. <a href="https://github.com/innollia/joibongbang/commits/main/work/snappin">커밋</a></td></tr>
 <tr><td>2026-11-01 18:58</td><td><b>stdint 타입</b> — <code>unsigned long</code>·<code>unsigned char</code>·<code>long</code> 등을 <code>uint32_t</code>(픽셀 값·색), <code>uint8_t</code>(바이트·RGB), <code>int64_t</code>(ms 시간)로 바꿈. Xlib가 꼭 요구하는 곳(format 32 속성의 <code>long</code>, <code>XParseGeometry</code>의 <code>unsigned int</code>)만 남김. 동작은 그대로. <a href="https://github.com/innollia/joibongbang/commit/5d55327">5d55327</a></td></tr>
 <tr><td>2026-11-01 18:04</td><td><b>주석 추가</b> — <code>snappin.c</code> 전체에 영어 주석(파일 머리말, 함수별 설명, 드래그 선택·화면 고정·CLIPBOARD 처리·INCR·옵션 해석). 동작은 그대로. <a href="https://github.com/innollia/joibongbang/commit/080f935">080f935</a></td></tr>
 <tr><td>2026-11-01 17:33</td><td><b>1.0 — 옵션 추가</b> — 파이썬 버전 삭제. 기본 동작을 "찍어서 저장"으로 바꾸고 띄우기는 <code>--pin</code>으로. <code>--geometry</code>, <code>--fullscreen</code>, <code>--output</code>(기본 실행 폴더), <code>--no-save</code>, <code>--clipboard</code>, <code>--delay</code>, <code>--quiet</code>, <code>--help</code>, <code>--version</code> 추가. 저장 경로는 stdout, 같은 이름은 <code>-2</code>, <code>-3</code>…, 종료 코드 0/1/2. <a href="https://github.com/innollia/joibongbang/commit/ad4dd22">ad4dd22</a></td></tr>
