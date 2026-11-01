@@ -71,4 +71,14 @@ snappin -o - | convert - out.jpg     # PNG를 표준 출력으로</pre>
 <li>24비트 트루컬러 화면에서만 동작합니다.</li>
 <li>모니터가 여러 개여도 전체 화면을 한 번에 덮고 고릅니다.</li>
 </ul>
+
+<h2>변경 기록</h2>
+<p>최신이 위입니다. 시간은 한국 시간. 바뀐 코드는 <a href="https://github.com/innollia/joibongbang/commits/main/work/snappin">GitHub 커밋 기록</a>에서 볼 수 있습니다.</p>
+<table>
+<tr><td>2026-11-01 18:04</td><td><b>주석 추가</b> — <code>snappin.c</code> 전체에 영어 주석(파일 머리말, 함수별 설명, 드래그 선택·화면 고정·CLIPBOARD 처리·INCR·옵션 해석). 동작은 그대로. <a href="https://github.com/innollia/joibongbang/commit/080f935">080f935</a></td></tr>
+<tr><td>2026-11-01 17:33</td><td><b>1.0 — 옵션 추가</b> — 파이썬 버전 삭제. 기본 동작을 "찍어서 저장"으로 바꾸고 띄우기는 <code>--pin</code>으로. <code>--geometry</code>, <code>--fullscreen</code>, <code>--output</code>(기본 실행 폴더), <code>--no-save</code>, <code>--clipboard</code>, <code>--delay</code>, <code>--quiet</code>, <code>--help</code>, <code>--version</code> 추가. 저장 경로는 stdout, 같은 이름은 <code>-2</code>, <code>-3</code>…, 종료 코드 0/1/2. <a href="https://github.com/innollia/joibongbang/commit/ad4dd22">ad4dd22</a></td></tr>
+<tr><td>2026-11-01 17:23</td><td><b>stb·클립보드</b> — PNG 저장을 <code>stb_image_write.h</code>로 바꿈(압축됨). Ctrl+C가 xclip 대신 CLIPBOARD를 직접 잡아 <code>image/png</code>로 내줌(큰 그림은 INCR). 주석·출력 영어로. <a href="https://github.com/innollia/joibongbang/commit/c928c30">c928c30</a></td></tr>
+<tr><td>2026-11-01 17:08</td><td><b>C 버전</b> — Xlib만 쓰는 <code>snappin.c</code> 추가. 파이썬 버전과 같은 조작(옮기기, 확대·축소, 투명도, 복사, 저장, 새 캡처, 메뉴). <a href="https://github.com/innollia/joibongbang/commit/52fcaf6">52fcaf6</a></td></tr>
+<tr><td>2026-11-01 16:59</td><td><b>첫 버전</b> — 파이썬(Tkinter·Pillow) <code>snappin.py</code>. 드래그로 찍고 찍은 자리에 그대로 띄우기. <a href="https://github.com/innollia/joibongbang/commit/ef6a9e3">ef6a9e3</a></td></tr>
+</table>
 </html>
