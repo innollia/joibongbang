@@ -1,62 +1,74 @@
 <!doctype html>
 <html lang="ko">
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>snappin — X11 캡처 후 같은 자리에 띄우기</title>
+<title>snappin — X11 화면 캡처 (C)</title>
 <style>
 body{font:16px/1.6 system-ui,"Malgun Gothic",sans-serif;max-width:760px;margin:40px auto;padding:0 16px;background:#111;color:#eee}
 a{color:#7cf}code,pre{background:#222;border-radius:6px}code{padding:1px 5px}pre{padding:12px;overflow:auto}
-table{border-collapse:collapse}td{border-bottom:1px solid #333;padding:4px 12px 4px 0}
+table{border-collapse:collapse}td{border-bottom:1px solid #333;padding:4px 12px 4px 0;vertical-align:top}
 .btn{display:inline-block;background:#3daee9;color:#000;padding:8px 16px;border-radius:6px;text-decoration:none;font-weight:bold}
 </style>
 <p><a href="../../">← 목록</a></p>
 <h1>snappin</h1>
-<p>X11에서 마우스로 드래그해 화면 일부를 찍으면, 찍은 그림이 <b>찍은 그 자리에</b> 테두리 없는 창으로 떠 있습니다(항상 위). Snipaste의 "핀" 기능과 비슷합니다.</p>
-<p><a class="btn" href="snappin.py" download>snappin.py 받기</a> &nbsp; <a class="btn" href="snappin.c" download>snappin.c 받기 (C 버전)</a></p>
+<p>X11에서 드래그(또는 <code>--geometry</code>)로 화면 일부를 찍어 PNG로 저장하는 C 프로그램입니다. <code>--pin</code>을 주면 찍은 그림이 <b>찍은 그 자리에</b> 테두리 없는 창으로 떠 있습니다(항상 위). 주석과 출력은 영어입니다.</p>
+<p><a class="btn" href="snappin.c" download>snappin.c 받기</a></p>
 
-<h2>설치</h2>
-<pre>sudo apt install python3-tk python3-pil python3-pil.imagetk xclip</pre>
-<p>(xclip은 복사 기능에만 필요합니다. 다른 배포판은 tkinter + Pillow만 있으면 됩니다.)</p>
-
-<h2>실행</h2>
-<pre>python3 snappin.py</pre>
-<p>바탕화면 설정의 단축키(예: <code>Ctrl+Shift+A</code>)에 이 명령을 연결해 두면 편합니다.</p>
-
-<h2>C 버전</h2>
-<p>같은 기능을 C로 옮긴 것입니다. Xlib와 <a href="https://github.com/nothings/stb">stb_image_write.h</a>(PNG 만들기)를 씁니다. 주석과 출력은 영어입니다.</p>
-<p><code>stb_image_write.h</code>를 <code>snappin.c</code>와 같은 폴더에 두고 빌드하세요.</p>
+<h2>빌드</h2>
+<p><a href="https://github.com/nothings/stb">stb_image_write.h</a>를 <code>snappin.c</code>와 같은 폴더에 두고 빌드합니다.</p>
 <pre>sudo apt install build-essential libx11-dev
 wget https://raw.githubusercontent.com/nothings/stb/master/stb_image_write.h
 cc -O2 -o snappin snappin.c -lX11 -lm
-./snappin</pre>
+./snappin --help</pre>
+
+<h2>옵션</h2>
+<table>
+<tr><td><code>-g, --geometry WxH+X+Y</code></td><td>드래그 대신 이 범위를 찍음 (X11 형식, <code>-0-0</code>처럼 음수는 오른쪽·아래 기준)</td></tr>
+<tr><td><code>-f, --fullscreen</code></td><td>화면 전체</td></tr>
+<tr><td><code>-o, --output PATH</code></td><td>저장 위치. 파일 이름, 폴더(끝이 <code>/</code>이거나 이미 있는 폴더), 또는 <code>-</code>(표준 출력). 기본은 실행한 폴더</td></tr>
+<tr><td><code>-n, --no-save</code></td><td>파일로 저장하지 않음 (<code>-c</code>나 <code>-p</code>와 함께)</td></tr>
+<tr><td><code>-c, --clipboard</code></td><td>CLIPBOARD에 <code>image/png</code>로 복사</td></tr>
+<tr><td><code>-p, --pin</code></td><td>찍은 그림을 같은 자리에 띄움 (기본은 안 띄움)</td></tr>
+<tr><td><code>-d, --delay SEC</code></td><td>SEC초 기다렸다 찍기 (소수 가능)</td></tr>
+<tr><td><code>-q, --quiet</code></td><td>오류 말고는 아무것도 출력하지 않음</td></tr>
+<tr><td><code>-h, --help</code> / <code>-V, --version</code></td><td>도움말 / 버전</td></tr>
+</table>
 <ul>
-<li>Ctrl+C를 누르면 snappin이 직접 <b>CLIPBOARD</b>에 <code>image/png</code>로 넣습니다(xclip 필요 없음). 이렇게 꺼낼 수 있습니다:<br><code>xclip -o -sel clip -t image/png &gt; image.png</code></li>
-<li>복사한 뒤 그림을 다 닫아도, 다른 것을 복사하기 전까지는 뒤에서 작은 프로세스가 클립보드를 계속 들고 있습니다(xclip과 같은 방식).</li>
-<li>오른쪽 클릭 메뉴는 영어로 나옵니다 (Copy, Save, Actual size, New capture, Close, Close all).</li>
-<li>24비트 트루컬러 화면에서만 동작합니다 (요즘 화면은 거의 다 그렇습니다).</li>
+<li>파일 이름은 <code>snappin-YYYYmmdd-HHMMSS.png</code>. 같은 이름이 있으면 <code>-2</code>, <code>-3</code>…을 붙입니다.</li>
+<li>저장한 파일 경로는 표준 출력에, 다른 안내는 표준 에러에 나옵니다. 그래서 <code>f=$(snappin)</code>처럼 쓸 수 있습니다.</li>
+<li>종료 코드: 0 성공, 1 취소·실패, 2 옵션 잘못.</li>
 </ul>
+
+<h2>예</h2>
+<pre>snappin                              # 드래그 → ./snappin-....png
+snappin -p -n                        # 드래그 → 띄우기만, 파일 없음
+snappin -c -n                        # 드래그 → 클립보드에만
+snappin -g 800x600+100+50 -o a.png   # 정해진 범위를 a.png로
+snappin -f -d 3 -o ~/Pictures/       # 3초 뒤 화면 전체
+snappin -o - | convert - out.jpg     # PNG를 표준 출력으로</pre>
+<p>클립보드에서 꺼내기: <code>xclip -o -sel clip -t image/png &gt; image.png</code><br>
+클립보드에 넣은 채로 snappin이 끝나면, 다른 것을 복사하기 전까지 뒤에서 작은 프로세스가 클립보드를 들고 있습니다(xclip과 같은 방식).</p>
 
 <h2>조작</h2>
 <table>
-<tr><td colspan=2><b>캡처 화면</b></td></tr>
-<tr><td>드래그</td><td>영역 고르기 (놓으면 바로 그 자리에 뜸)</td></tr>
+<tr><td colspan=2><b>범위 고르기</b></td></tr>
+<tr><td>드래그</td><td>영역 고르기 (놓으면 바로 찍힘)</td></tr>
 <tr><td>Esc / 오른쪽 클릭</td><td>취소</td></tr>
-<tr><td colspan=2><b>떠 있는 그림</b></td></tr>
+<tr><td colspan=2><b>떠 있는 그림 (<code>-p</code>)</b></td></tr>
 <tr><td>드래그</td><td>옮기기</td></tr>
 <tr><td>휠</td><td>확대 / 축소</td></tr>
 <tr><td>Ctrl + 휠</td><td>투명도 (창 효과가 켜진 환경에서만)</td></tr>
 <tr><td>Ctrl+C</td><td>클립보드에 복사</td></tr>
-<tr><td>Ctrl+S</td><td><code>~/Pictures</code>에 PNG로 저장</td></tr>
+<tr><td>Ctrl+S</td><td><code>-o</code> 위치에 PNG로 저장</td></tr>
 <tr><td>1</td><td>원래 크기</td></tr>
 <tr><td>N</td><td>새 캡처 (여러 장 띄우기)</td></tr>
 <tr><td>더블클릭 / Esc</td><td>닫기</td></tr>
 <tr><td>오른쪽 클릭</td><td>메뉴</td></tr>
 </table>
-<p>떠 있는 그림을 모두 닫으면 프로그램이 끝납니다.</p>
 
 <h2>참고</h2>
 <ul>
-<li>X11 전용입니다. Wayland 세션에서는 화면을 찍지 못하거나 검게 나올 수 있습니다.</li>
-<li>Pillow로 화면을 못 찍으면 <code>maim</code>, <code>import</code>(ImageMagick), <code>scrot</code> 중 있는 것을 대신 씁니다.</li>
+<li>X11 전용입니다. Wayland에서는 화면을 찍지 못하거나 검게 나올 수 있습니다.</li>
+<li>24비트 트루컬러 화면에서만 동작합니다.</li>
 <li>모니터가 여러 개여도 전체 화면을 한 번에 덮고 고릅니다.</li>
 </ul>
 </html>

@@ -1,22 +1,22 @@
-/* snappin.c - drag to capture part of the X11 screen, then pin the capture
- * as a floating window at the exact same position.
- * C port of snappin.py. Uses Xlib and stb_image_write.h (PNG encoding).
+/* snappin.c - capture part of the X11 screen (drag or --geometry) and save it
+ * as a PNG. With --pin the capture also floats as a window at the exact same
+ * position. Uses Xlib and stb_image_write.h (PNG encoding).
  *
  * Build (stb_image_write.h must be in the same directory):
  *   cc -O2 -o snappin snappin.c -lX11 -lm
  *   Debian/Ubuntu: sudo apt install build-essential libx11-dev
- * Run: ./snappin   (bind it to a hotkey)
+ * Run: ./snappin --help
  *
  * Capture screen: drag = select area, Esc / right click = cancel
  * Pin:            drag = move, wheel = zoom, Ctrl+wheel = opacity
  *                 Ctrl+C = copy PNG to CLIPBOARD, Ctrl+S = save, 1 = actual size,
  *                 N = new capture, double click / Esc = close, right click = menu
  *
- * Ctrl+C makes snappin itself the owner of the CLIPBOARD selection with an
- * image/png target, so this works:
+ * --clipboard and Ctrl+C make snappin itself the owner of the CLIPBOARD
+ * selection with an image/png target, so this works:
  *   xclip -o -sel clip -t image/png > image.png
- * If the clipboard is still held when the last pin closes, snappin keeps
- * serving it from a background process until something else is copied.
+ * If the clipboard is still held when snappin would exit, it keeps serving it
+ * from a background process until something else is copied.
  */
 #define _DEFAULT_SOURCE
 #include <X11/Xlib.h>
@@ -24,7 +24,11 @@
 #include <X11/Xatom.h>
 #include <X11/keysym.h>
 #include <X11/cursorfont.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <getopt.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -45,6 +49,17 @@
 #define MAX_PIXELS 40000000.0 /* do not zoom beyond this many pixels */
 #define MAX_XFERS  16          /* concurrent INCR clipboard transfers */
 #define XFER_TIMEOUT_MS 5000
+#define VERSION    "1.0"
+
+static struct {
+    int pin, nosave, clipboard, quiet, full;
+    const char *geometry, *output;
+    double delay;
+} opt;
+
+static char out_dir[4096];   /* where timestamped files go */
+static const char *out_file; /* explicit file name from -o (or "-"), used once */
+static int out_file_used, captured, exit_code;
 
 static Display *dpy;
 static Window root;
@@ -65,6 +80,26 @@ static long now_ms(void)
 }
 
 static int iround(double v) { return v < 0 ? (int)(v - 0.5) : (int)(v + 0.5); }
+
+/* informational message on stderr, silenced by -q */
+static void info(const char *fmt, ...)
+{
+    if (opt.quiet)
+        return;
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
+}
+
+static void null_fd(int fd)
+{
+    int n = open("/dev/null", O_RDWR);
+    if (n >= 0 && n != fd) {
+        dup2(n, fd);
+        close(n);
+    }
+}
 
 /* ---------- pixel value <-> RGB ---------- */
 
@@ -153,9 +188,58 @@ static int png_mem(const Img *im, Buf *out)
     return 0;
 }
 
+static int img_stdout(const Img *im)
+{
+    Buf b;
+    if (png_mem(im, &b)) {
+        fprintf(stderr, "Could not encode the PNG\n");
+        return 0;
+    }
+    int ok = fwrite(b.p, 1, b.len, stdout) == b.len && fflush(stdout) == 0;
+    free(b.p);
+    if (!ok)
+        fprintf(stderr, "Could not write the PNG to stdout\n");
+    null_fd(1); /* close the pipe so the reader sees EOF while we keep running */
+    return ok;
+}
+
+/* <out_dir>/snappin-YYYYmmdd-HHMMSS[-N].png that does not exist yet */
+static void unique_path(char *path, size_t n)
+{
+    char stamp[32];
+    time_t t = time(NULL);
+    strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", localtime(&t));
+    snprintf(path, n, "%s/snappin-%s.png", out_dir, stamp);
+    for (int i = 2; access(path, F_OK) == 0 && i < 1000; i++)
+        snprintf(path, n, "%s/snappin-%s-%d.png", out_dir, stamp, i);
+}
+
+/* Save to the -o file the first time, then to timestamped files. 1 = ok */
+static int img_save(const Img *im)
+{
+    char path[4200];
+    if (out_file && !out_file_used) {
+        out_file_used = 1;
+        if (!strcmp(out_file, "-"))
+            return img_stdout(im);
+        snprintf(path, sizeof path, "%s", out_file);
+    } else {
+        unique_path(path, sizeof path);
+    }
+    if (!stbi_write_png(path, im->w, im->h, 3, im->rgb, im->w * 3)) {
+        fprintf(stderr, "Could not save: %s\n", path);
+        return 0;
+    }
+    if (!opt.quiet) {
+        printf("%s\n", path); /* the saved path goes to stdout for scripts */
+        fflush(stdout);
+    }
+    return 1;
+}
+
 /* ---------- clipboard (we own the CLIPBOARD selection) ---------- */
 
-static Atom a_clipboard, a_targets, a_timestamp, a_png, a_incr;
+static Atom a_clipboard, a_targets, a_timestamp, a_png, a_incr, a_time;
 static Window clip_win;
 static size_t chunk_max;
 static struct { unsigned char *data; size_t len; Time time; int owned; } clip;
@@ -178,6 +262,15 @@ static void xfer_end(int i)
     XSelectInput(dpy, xfers[i].req, NoEventMask);
     free(xfers[i].data);
     xfers[i] = xfers[--nxfers];
+}
+
+/* current X server time, for taking the selection without a user event */
+static Time server_time(void)
+{
+    XEvent e;
+    XChangeProperty(dpy, clip_win, a_time, XA_INTEGER, 32, PropModeAppend, NULL, 0);
+    XWindowEvent(dpy, clip_win, PropertyChangeMask, &e);
+    return e.xproperty.time;
 }
 
 static int clip_set(const Img *im, Time t)
@@ -424,38 +517,35 @@ static void pin_flash(Pin *p, unsigned rgb)
     pin_draw(p);
 }
 
-static void pin_copy(Pin *p, Time t)
+static int img_copy(const Img *im, Time t)
 {
-    int ok = clip_set(&p->img, t);
+    int ok = clip_set(im, t);
     if (ok)
-        printf("Copied %dx%d PNG to the clipboard (image/png)\n", p->img.w, p->img.h);
+        info("Copied %dx%d PNG to the clipboard (image/png)\n", im->w, im->h);
     else
         fprintf(stderr, "Could not take the clipboard\n");
-    fflush(stdout);
-    pin_flash(p, ok ? 0x00ff00 : 0xff0000);
+    return ok;
 }
 
-static void pin_save(Pin *p)
-{
-    const char *home = getenv("HOME");
-    char dir[4096], path[4200], stamp[32];
-    struct stat st;
-    if (!home)
-        home = ".";
-    snprintf(dir, sizeof dir, "%s/Pictures", home);
-    if (stat(dir, &st) || !S_ISDIR(st.st_mode))
-        snprintf(dir, sizeof dir, "%s", home);
-    time_t t = time(NULL);
-    strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", localtime(&t));
-    snprintf(path, sizeof path, "%s/snappin-%s.png", dir, stamp);
+static void pin_copy(Pin *p, Time t) { pin_flash(p, img_copy(&p->img, t) ? 0x00ff00 : 0xff0000); }
 
-    int ok = stbi_write_png(path, p->img.w, p->img.h, 3, p->img.rgb, p->img.w * 3) != 0;
-    if (ok)
-        printf("Saved: %s\n", path);
+static void pin_save(Pin *p) { pin_flash(p, img_save(&p->img) ? 0x00ff00 : 0xff0000); }
+
+/* a new capture is ready: save / copy / pin it as the options say */
+static void deliver(Img im, int x, int y)
+{
+    int ok = 1;
+    captured++;
+    if (!opt.nosave && !img_save(&im))
+        ok = 0;
+    if (opt.clipboard && !img_copy(&im, server_time()))
+        ok = 0;
+    if (!ok)
+        exit_code = 1;
+    if (opt.pin)
+        pin_new(im, x, y);
     else
-        fprintf(stderr, "Could not save: %s\n", path);
-    fflush(stdout);
-    pin_flash(p, ok ? 0x00ff00 : 0xff0000);
+        free(im.rgb);
 }
 
 static void new_capture(void) { capture_at = now_ms() + 200; } /* capture after the menu is gone */
@@ -655,6 +745,15 @@ static void sel_draw(void)
     XCopyArea(dpy, sel.back, sel.win, gc, 0, 0, SW, SH, 0, 0);
 }
 
+static Img img_from(XImage *xi, int x0, int y0, int w, int h)
+{
+    Img im = { w, h, malloc((size_t)w * h * 3) };
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++)
+            pixel_rgb(XGetPixel(xi, x0 + x, y0 + y), im.rgb + ((size_t)y * w + x) * 3);
+    return im;
+}
+
 static void start_capture(void)
 {
     if (sel.active)
@@ -662,6 +761,7 @@ static void start_capture(void)
     XImage *shot = XGetImage(dpy, root, 0, 0, SW, SH, AllPlanes, ZPixmap);
     if (!shot) {
         fprintf(stderr, "Could not grab the screen. Is this an X11 session?\n");
+        exit_code = 1;
         return;
     }
     /* darkened copy */
@@ -723,19 +823,32 @@ static void sel_finish(int take)
     XUngrabPointer(dpy, CurrentTime);
     XUngrabKeyboard(dpy, CurrentTime);
     XDestroyWindow(dpy, sel.win);
-    if (take) {
-        int w = sel.x1 - sel.x0, h = sel.y1 - sel.y0;
-        Img im = { w, h, malloc((size_t)w * h * 3) };
-        for (int y = 0; y < h; y++)
-            for (int x = 0; x < w; x++)
-                pixel_rgb(XGetPixel(sel.shot, sel.x0 + x, sel.y0 + y), im.rgb + ((size_t)y * w + x) * 3);
-        pin_new(im, sel.x0, sel.y0);
-    }
     XFreePixmap(dpy, sel.orig);
     XFreePixmap(dpy, sel.dark);
     XFreePixmap(dpy, sel.back);
-    XDestroyImage(sel.shot);
     sel.active = 0;
+    if (take) {
+        int w = sel.x1 - sel.x0, h = sel.y1 - sel.y0;
+        deliver(img_from(sel.shot, sel.x0, sel.y0, w, h), sel.x0, sel.y0);
+    } else {
+        info("Cancelled\n");
+        if (!captured)
+            exit_code = 1;
+    }
+    XDestroyImage(sel.shot);
+}
+
+/* capture a fixed area without the selection screen */
+static void grab_rect(int x, int y, int w, int h)
+{
+    XImage *xi = XGetImage(dpy, root, x, y, w, h, AllPlanes, ZPixmap);
+    if (!xi) {
+        fprintf(stderr, "Could not grab the screen. Is this an X11 session?\n");
+        exit_code = 1;
+        return;
+    }
+    deliver(img_from(xi, 0, 0, w, h), x, y);
+    XDestroyImage(xi);
 }
 
 static void sel_update(int x, int y)
@@ -804,8 +917,138 @@ static int on_xerror(Display *d, XErrorEvent *e)
     return 0;
 }
 
-int main(void)
+static void usage(FILE *f)
 {
+    fputs(
+"Usage: snappin [options]\n"
+"Capture part of the X11 screen and save it as a PNG.\n"
+"With no options, drag to select an area; it is saved in the current\n"
+"directory as snappin-YYYYmmdd-HHMMSS.png.\n"
+"\n"
+"  -g, --geometry WxH+X+Y  capture this area instead of selecting with the mouse\n"
+"                          (X11 geometry; negative X/Y count from the right/bottom)\n"
+"  -f, --fullscreen        capture the whole screen\n"
+"  -o, --output PATH       where to save: a file name, a directory (ending in /\n"
+"                          or existing), or - for stdout (default: .)\n"
+"  -n, --no-save           do not save a file\n"
+"  -c, --clipboard         copy the PNG to the CLIPBOARD selection (image/png)\n"
+"  -p, --pin               also show the capture as a floating window at the\n"
+"                          same place\n"
+"  -d, --delay SEC         wait SEC seconds before capturing (decimals allowed)\n"
+"  -q, --quiet             print nothing except errors\n"
+"  -h, --help              show this help\n"
+"  -V, --version           show the version\n"
+"\n"
+"Selection: drag = select, Esc / right click = cancel\n"
+"Pin window: drag = move, wheel = zoom, Ctrl+wheel = opacity,\n"
+"  Ctrl+C = copy, Ctrl+S = save (to the -o place), 1 = actual size,\n"
+"  N = new capture, double click / Esc = close, right click = menu\n"
+"\n"
+"The saved file path is printed to stdout. Exit status: 0 = ok,\n"
+"1 = cancelled or failed, 2 = bad usage.\n"
+"\n"
+"Examples:\n"
+"  snappin                             select an area, save it in .\n"
+"  snappin -p -n                       select an area and pin it, no file\n"
+"  snappin -c -n                       select an area, clipboard only\n"
+"  snappin -g 800x600+100+50 -o a.png  fixed area to a.png\n"
+"  snappin -f -d 3 -o ~/Pictures/      whole screen after 3 s\n"
+"  snappin -o - | convert - out.jpg    PNG to stdout\n", f);
+}
+
+static int bad_usage(const char *msg, const char *arg)
+{
+    fprintf(stderr, "snappin: %s%s%s\nTry 'snappin --help'.\n", msg, arg ? ": " : "", arg ? arg : "");
+    return 2;
+}
+
+/* fill out_dir / out_file from -o */
+static int setup_output(void)
+{
+    const char *o = opt.output;
+    struct stat st;
+    if (!o) {
+        strcpy(out_dir, ".");
+        return 0;
+    }
+    if (!*o)
+        return bad_usage("empty --output", NULL);
+    if (!strcmp(o, "-")) {
+        out_file = o;
+        strcpy(out_dir, ".");
+        return 0;
+    }
+    size_t n = strlen(o);
+    if (n >= sizeof out_dir)
+        return bad_usage("--output path too long", NULL);
+    if (o[n - 1] == '/' || (stat(o, &st) == 0 && S_ISDIR(st.st_mode))) {
+        strcpy(out_dir, o);
+        while (n > 1 && out_dir[n - 1] == '/')
+            out_dir[--n] = 0;
+        if (mkdir(out_dir, 0755) && errno != EEXIST) {
+            fprintf(stderr, "snappin: cannot create directory: %s\n", out_dir);
+            return 1;
+        }
+        return 0;
+    }
+    out_file = o;
+    strcpy(out_dir, o);
+    char *s = strrchr(out_dir, '/');
+    if (!s)
+        strcpy(out_dir, ".");
+    else if (s == out_dir)
+        s[1] = 0;
+    else
+        *s = 0;
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    static const struct option longopts[] = {
+        { "geometry", required_argument, 0, 'g' },
+        { "fullscreen", no_argument, 0, 'f' },
+        { "output", required_argument, 0, 'o' },
+        { "no-save", no_argument, 0, 'n' },
+        { "clipboard", no_argument, 0, 'c' },
+        { "pin", no_argument, 0, 'p' },
+        { "delay", required_argument, 0, 'd' },
+        { "quiet", no_argument, 0, 'q' },
+        { "help", no_argument, 0, 'h' },
+        { "version", no_argument, 0, 'V' },
+        { 0, 0, 0, 0 }
+    };
+    int c;
+    char *end;
+    while ((c = getopt_long(argc, argv, "g:fo:ncpd:qhV", longopts, NULL)) != -1) {
+        switch (c) {
+        case 'g': opt.geometry = optarg; break;
+        case 'f': opt.full = 1; break;
+        case 'o': opt.output = optarg; break;
+        case 'n': opt.nosave = 1; break;
+        case 'c': opt.clipboard = 1; break;
+        case 'p': opt.pin = 1; break;
+        case 'd':
+            opt.delay = strtod(optarg, &end);
+            if (end == optarg || *end || opt.delay < 0 || opt.delay > 86400)
+                return bad_usage("bad --delay", optarg);
+            break;
+        case 'q': opt.quiet = 1; break;
+        case 'h': usage(stdout); return 0;
+        case 'V': puts("snappin " VERSION); return 0;
+        default: return 2; /* getopt already printed the error */
+        }
+    }
+    if (optind < argc)
+        return bad_usage("unexpected argument", argv[optind]);
+    if (opt.geometry && opt.full)
+        return bad_usage("use only one of --geometry and --fullscreen", NULL);
+    if (opt.nosave && !opt.clipboard && !opt.pin)
+        return bad_usage("--no-save needs --clipboard or --pin, or there is nothing to do", NULL);
+    int r = setup_output();
+    if (r)
+        return r;
+
     signal(SIGPIPE, SIG_IGN);
     dpy = XOpenDisplay(NULL);
     if (!dpy) {
@@ -843,12 +1086,43 @@ int main(void)
     a_timestamp = XInternAtom(dpy, "TIMESTAMP", False);
     a_png = XInternAtom(dpy, "image/png", False);
     a_incr = XInternAtom(dpy, "INCR", False);
+    a_time = XInternAtom(dpy, "_SNAPPIN_TIME", False);
     clip_win = XCreateSimpleWindow(dpy, root, -10, -10, 1, 1, 0, 0, 0);
+    XSelectInput(dpy, clip_win, PropertyChangeMask);
     chunk_max = (size_t)XMaxRequestSize(dpy) * 4 - 1024;
     if (chunk_max > 256 * 1024)
         chunk_max = 256 * 1024;
 
-    start_capture();
+    /* fixed area from -g / -f, clipped to the screen */
+    int gx = 0, gy = 0, gw = SW, gh = SH;
+    if (opt.geometry) {
+        unsigned w = 0, h = 0;
+        int m = XParseGeometry(opt.geometry, &gx, &gy, &w, &h);
+        if (!(m & WidthValue) || !(m & HeightValue) || !w || !h)
+            return bad_usage("bad --geometry (want WxH+X+Y)", opt.geometry);
+        gw = w > (unsigned)SW * 2 ? SW * 2 : (int)w;
+        gh = h > (unsigned)SH * 2 ? SH * 2 : (int)h;
+        if (m & XNegative) gx += SW - gw;
+        if (m & YNegative) gy += SH - gh;
+        if (gx < 0) { gw += gx; gx = 0; }
+        if (gy < 0) { gh += gy; gy = 0; }
+        if (gx + gw > SW) gw = SW - gx;
+        if (gy + gh > SH) gh = SH - gy;
+        if (gw < 1 || gh < 1) {
+            fprintf(stderr, "snappin: --geometry is outside the %dx%d screen\n", SW, SH);
+            return 1;
+        }
+    }
+
+    if (opt.delay > 0) {
+        struct timespec ts = { (time_t)opt.delay, (long)((opt.delay - (time_t)opt.delay) * 1e9) };
+        while (nanosleep(&ts, &ts) && errno == EINTR)
+            ;
+    }
+    if (opt.geometry || opt.full)
+        grab_rect(gx, gy, gw, gh);
+    else
+        start_capture();
 
     int fd = ConnectionNumber(dpy), daemonized = 0;
     for (;;) {
@@ -906,14 +1180,19 @@ int main(void)
             if (!daemonized) {
                 /* keep serving the clipboard in the background, like xclip does */
                 daemonized = 1;
-                printf("Clipboard is kept by a background process until something else is copied.\n");
+                info("Clipboard is kept by a background process until something else is copied.\n");
                 fflush(stdout);
                 XSync(dpy, False);
                 pid_t pid = fork();
                 if (pid > 0)
-                    _exit(0);
-                if (pid == 0)
+                    _exit(exit_code);
+                if (pid == 0) {
                     setsid();
+                    /* let $(snappin ...) and pipes finish */
+                    null_fd(0);
+                    null_fd(1);
+                    null_fd(2);
+                }
             }
         }
         if (XPending(dpy))
@@ -926,5 +1205,5 @@ int main(void)
         select(fd + 1, &fds, NULL, NULL, wait >= 0 ? &tv : NULL);
     }
     XCloseDisplay(dpy);
-    return 0;
+    return exit_code;
 }
