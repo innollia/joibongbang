@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>16장. 응용 프로그램 유틸리티 함수 (Application Utility Functions) — Xlib 한국어</title>
+<style>
+body{font:16px/1.75 system-ui,"Malgun Gothic",sans-serif;max-width:860px;margin:40px auto;padding:0 16px;background:#111;color:#e8e8e8}
+a{color:#7cf} h1{line-height:1.3} h2{margin-top:3em;border-bottom:1px solid #444;padding-bottom:.3em} h2 small{color:#999;font-weight:normal;font-size:.6em}
+h3{margin-top:2em;color:#fd8} h4{color:#9df}
+code{font-family:ui-monospace,Consolas,monospace;font-size:.92em;background:#222;padding:1px 4px;border-radius:3px}
+pre{background:#1b1d22;border:1px solid #333;padding:12px;overflow-x:auto;border-radius:6px;line-height:1.45} pre code{background:none;padding:0}
+.tip{background:#1d2a1d;border-left:4px solid #6c6;padding:8px 12px;margin:1em 0;border-radius:4px}
+table{border-collapse:collapse;margin:1em 0;font-size:.92em;display:block;overflow-x:auto} td,th{border:1px solid #444;padding:4px 8px;vertical-align:top} th{background:#222}
+nav ol{columns:2} .top{position:fixed;right:16px;bottom:16px;background:#333;padding:6px 10px;border-radius:6px;text-decoration:none}
+.pager{display:flex;justify-content:space-between;gap:12px;margin:2em 0;padding-top:1em;border-top:1px solid #444} .pager a{text-decoration:none}
+</style>
+<p><a href="../../">← 조이봉방</a> · <a href="./">Xlib 번역 차례</a></p><div class="pager"><a href="ch15.html">← 15장. 리소스 관리자 함수 (Resource Manager Functions)</a><a href="./">차례</a><a href="apA.html">부록 A. Xlib 함수와 프로토콜 요청 (Xlib Functions and Protocol Requests) →</a></div><section id="ch16"><h2 style="margin-top:1em">16장. 응용 프로그램 유틸리티 함수 <small>(Application Utility Functions)</small></h2>
+
+<p>X를 초기화한 뒤 여러 툴킷에서 공통으로 자주 필요한 기능들을 모은 장이다. 키보드 유틸리티, Latin-1 키 이벤트 변환, 영구 메모리 할당, 창 위치·크기 문자열 해석, 영역(region) 계산, cut buffer, visual 고르기, 이미지 조작, 비트맵 파일, 컨텍스트 관리자를 다룬다. 이 함수들 중 상당수는 서버에 프로토콜 요청을 보내지 않고 클라이언트 안에서만 계산한다. 그래서 빠르고, 서버 상태와 어긋나지 않게 캐시를 갱신하는 일이 필요할 때가 있다.</p>
+
+<h3>16.1 키보드 유틸리티 함수 <small>(Using Keyboard Utility Functions)</small></h3>
+<p>KeyCode와 KeySym 사이 변환, KeySym 분류, KeySym과 문자열 이름 사이 변환을 다룬다. 처음 세 함수는 Xlib이 캐시해 둔 서버 키보드 매핑을 쓰며, 각 KeyCode의 처음 네 KeySym은 12.7절의 규칙(한 개면 "K NoSymbol K NoSymbol"로 보는 등)에 따라 변형된 상태다. 변형되지 않은 원본이 필요하면 12.7절의 <code>XGetKeyboardMapping</code>을 쓴다.</p>
+
+<pre><code>KeySym  XLookupKeysym(XKeyEvent *key_event, int index);
+KeySym  XKeycodeToKeysym(Display *display, KeyCode keycode, int index);
+KeyCode XKeysymToKeycode(Display *display, KeySym keysym);</code></pre>
+<ul>
+<li><code>XLookupKeysym</code>: 키 이벤트의 KeyCode에 붙은 KeySym 목록에서 index번째를 돌려준다. 없으면 <code>NoSymbol</code>. 주의할 점: modifier 상태를 보지 않는다. index 0은 보통 "Shift 없이"의 기호, 1은 "Shift를 누른" 기호다. 그래서 Shift+a에도 index 0이면 <code>XK_a</code>가 나온다. 단축키처럼 "어떤 키를 눌렀나"만 알고 싶을 때 편하다.</li>
+<li><code>XKeycodeToKeysym</code>: 특정 KeyCode와 index에 대한 KeySym. 없으면 <code>NoSymbol</code>. (최근 libX11 헤더에는 이 함수에 deprecated 표시가 붙어 있어 컴파일 경고가 날 수 있다.)</li>
+<li><code>XKeysymToKeycode</code>: 그 KeySym을 가진 KeyCode. 어떤 KeyCode에도 없으면 0. <code>XGrabKey</code>에 넘길 KeyCode를 얻을 때 쓴다.</li>
+</ul>
+
+<pre><code>XRefreshKeyboardMapping(XMappingEvent *event_map);</code></pre>
+<p>Xlib 안의 KeyCode↔KeySym 캐시와 modifier 정보를 새로 고친다. 서버에서 매핑이 바뀌면 캐시가 낡으므로, <code>MappingNotify</code> 이벤트의 request가 <code>MappingKeyboard</code>나 <code>MappingModifier</code>일 때 부른다.</p>
+<pre><code>case MappingNotify:
+    if (ev.xmapping.request == MappingKeyboard ||
+        ev.xmapping.request == MappingModifier)
+        XRefreshKeyboardMapping(&amp;ev.xmapping);
+    break;</code></pre>
+
+<pre><code>void XConvertCase(KeySym keysym, KeySym *lower_return, KeySym *upper_return);</code></pre>
+<p>KeySym의 소문자·대문자 형태를 돌려준다. 대소문자가 없는 KeySym이면 둘 다 원래 값이다. Latin과 키릴 외의 문자에 대한 지원은 구현 의존이다.</p>
+
+<pre><code>KeySym XStringToKeysym(char *string);
+char  *XKeysymToString(KeySym keysym);</code></pre>
+<p>KeySym에는 숫자 코드와 함께 문자열 이름이 있다. 표준 이름은 <code>&lt;X11/keysymdef.h&gt;</code>의 이름에서 <code>XK_</code>를 뺀 것이다(예: <code>XK_Return</code> → "Return"). <code>XStringToKeysym</code>은 이름을 코드로 바꾸며, 맞는 것이 없으면 <code>NoSymbol</code>. 표준 밖의 KeySym도 얻을 수 있지만 그 범위와 방법은 구현 의존이다. <code>XKeysymToString</code>은 반대로 이름을 돌려주며, 정의되지 않은 KeySym이면 NULL이다. 돌려받은 문자열은 정적 영역이라 고치거나 해제하면 안 된다. 설정 파일에서 "Ctrl+F5" 같은 단축키 이름을 읽을 때 유용하다.</p>
+
+<h4>KeySym 분류 매크로</h4>
+<table>
+<tr><th>매크로</th><th>True인 경우</th></tr>
+<tr><td><code>IsCursorKey(keysym)</code></td><td>커서 키(화살표, Home 등)</td></tr>
+<tr><td><code>IsFunctionKey(keysym)</code></td><td>기능 키(F1 등)</td></tr>
+<tr><td><code>IsKeypadKey(keysym)</code></td><td>표준 키패드 키</td></tr>
+<tr><td><code>IsPrivateKeypadKey(keysym)</code></td><td>벤더 전용 키패드 키</td></tr>
+<tr><td><code>IsMiscFunctionKey(keysym)</code></td><td>기타 기능 키</td></tr>
+<tr><td><code>IsModifierKey(keysym)</code></td><td>modifier 키(Shift, Control 등)</td></tr>
+<tr><td><code>IsPFKey(keysym)</code></td><td>PF 키</td></tr>
+</table>
+<p>예를 들어 Shift 키만 눌렀을 때 생기는 KeyPress를 무시하려면 <code>IsModifierKey(ks)</code>로 거른다.</p>
+
+<h3>16.2 Latin-1 키 이벤트 함수 <small>(Using Latin-1 Keyboard Event Functions)</small></h3>
+<p>제대로 된 다국어 입력은 13장의 입력 메서드(<code>XmbLookupString</code> 등)가 담당한다. 하지만 Latin-1 문자와 ASCII 제어 문자만 다루면 되는 간단한 프로그램을 위해 더 쉬운 함수가 있다. 이 함수는 12.7절의 표준 modifier 규칙을 처리하고, 입력 메서드를 쓰지 않으며, 현재 로케일과도 무관하다.</p>
+<pre><code>int XLookupString(XKeyEvent *event_struct, char *buffer_return, int bytes_buffer,
+                  KeySym *keysym_return, XComposeStatus *status_in_out);</code></pre>
+<p>키 이벤트를 KeySym과 문자열로 바꾼다. 가장 많이 쓰는 키 입력 처리 함수다.</p>
+<ul>
+<li>KeySym은 Shift, Lock, 그룹, numlock modifier의 표준 해석(12.7절)으로 정해진다. 그래서 Shift+a는 <code>XK_A</code>, CapsLock 상태의 a도 <code>XK_A</code>가 된다(<code>XLookupKeysym</code>과의 차이).</li>
+<li>그 KeySym이 <code>XRebindKeysym</code>으로 다시 묶여 있으면 묶인 문자열을 buffer에 넣는다. 아니면 가능하면 ISO Latin-1 문자 하나로, Control이 눌려 있으면 ASCII 제어 문자로 바꿔 넣는다(예: Ctrl+C → 0x03).</li>
+<li>반환값은 buffer에 넣은 문자 수다. 화살표나 F1처럼 글자가 없는 키는 0을 돌려주고 KeySym만 채운다. 버퍼에는 최대 bytes_buffer바이트까지만 넣으며 <b>널 문자로 끝내 주지 않는다</b>.</li>
+<li><code>keysym_return</code>: NULL이 아니면 계산한 KeySym을 넣는다.</li>
+<li><code>status_in_out</code>: compose 처리(여러 키로 한 글자 만들기) 상태를 호출 사이에 보관하는 구조체. 만드는 방법이 구현 의존이므로 이식성 있는 프로그램은 NULL을 넘긴다.</li>
+</ul>
+<p>이 함수는 앞 절의 캐시를 쓰므로 <code>XRefreshKeyboardMapping</code>으로 최신 상태를 유지해야 한다.</p>
+<pre><code>/* 키 입력 처리 예 */
+#include &lt;X11/Xlib.h&gt;
+#include &lt;X11/Xutil.h&gt;
+#include &lt;X11/keysym.h&gt;
+...
+case KeyPress: {
+    char buf[32];
+    KeySym ks;
+    int n = XLookupString(&amp;ev.xkey, buf, sizeof buf - 1, &amp;ks, NULL);
+    buf[n] = '\0';                       /* 직접 널 종료 */
+
+    if (IsModifierKey(ks))
+        break;                           /* Shift 등 단독 입력 무시 */
+    if (ks == XK_Escape)
+        running = 0;
+    else if (ks == XK_Left)
+        move_left();
+    else if (n &gt; 0)
+        printf("typed: \"%s\" (keysym %s)\n", buf, XKeysymToString(ks));
+    break;
+}</code></pre>
+<div class="tip">한글 같은 비Latin-1 문자 입력은 <code>XLookupString</code>으로 받을 수 없다. 그런 입력은 13장의 XIM과 <code>XmbLookupString</code>/<code>Xutf8LookupString</code>을 써야 한다. 또 <code>XLookupString</code>은 KeyRelease 이벤트에도 쓸 수 있으며, 같은 문자를 다시 돌려준다는 점도 알아 둔다.</div>
+
+<pre><code>XRebindKeysym(Display *display, KeySym keysym, KeySym list[], int mod_count,
+              unsigned char *string, int num_bytes);</code></pre>
+<p>이 클라이언트 안에서만 KeySym의 의미를 바꾼다. list에 있는 modifier KeySym들(mod_count개)이 눌린 상태에서 그 keysym이 해석될 때, <code>XLookupString</code>이 string(num_bytes바이트, 복사해 둠)을 돌려주게 한다. 서버의 키 정의는 바꾸지 않으며, 긴 문자열을 키에 붙이는 쉬운 방법일 뿐이다. 텍스트 변환은 하지 않으므로 인코딩은 클라이언트가 책임진다. 존재하지 않는 KeySym도 다시 묶을 수 있다.</p>
+<pre><code>KeySym mods[] = { XK_Control_L };
+XRebindKeysym(d, XK_F1, mods, 1, (unsigned char *)"help me", 7);
+/* 이후 Ctrl(왼쪽)+F1을 누르면 XLookupString이 "help me"(7바이트)를 돌려준다 */</code></pre>
+
+<h3>16.3 영구 메모리 할당 <small>(Allocating Permanent Storage)</small></h3>
+<pre><code>char *Xpermalloc(unsigned int size);</code></pre>
+<p>프로그램이 끝날 때까지 절대 해제하지 않을 메모리를 할당한다. C의 double 정렬에 맞춰 할당되며, 운영체제 기본 할당기보다 성능·공간이 약간 나을 수 있다. 해제 함수는 없다. 자주 쓰지 않아 요약만 한다.</p>
+
+<h3>16.4 창 위치·크기 문자열 해석 <small>(Parsing the Window Geometry)</small></h3>
+<p>X 프로그램은 관례적으로 <code>-geometry 80x24+10-20</code> 같은 표준 문자열로 창 크기와 위치를 받는다. 이를 해석하는 함수다.</p>
+<pre><code>int XParseGeometry(char *parsestring, int *x_return, int *y_return,
+                   unsigned int *width_return, unsigned int *height_return);</code></pre>
+<p>다음 형식의 문자열을 해석한다.</p>
+<pre><code>[=][&lt;width&gt;{xX}&lt;height&gt;][{+-}&lt;xoffset&gt;{+-}&lt;yoffset&gt;]</code></pre>
+<p>(&lt; &gt;는 정수, [ ]는 생략 가능, { }는 "하나 고르기". 실제 문자열에 괄호를 쓰지는 않는다.) 예: "640x480", "+100+50", "=300x200-0-0".</p>
+<p>반환값은 문자열에서 실제로 찾은 값과 부호를 나타내는 비트마스크다: <code>XValue</code>, <code>YValue</code>, <code>WidthValue</code>, <code>HeightValue</code>, <code>XNegative</code>, <code>YNegative</code>(<code>&lt;X11/Xutil.h&gt;</code>). 찾은 값만 해당 인자에 쓰고, 찾지 못한 값의 인자는 건드리지 않는다. 그래서 기본값을 미리 넣어 두고 호출하면 된다. 관례상 −0과 +0은 다르다. "-0"은 "오른쪽(또는 아래) 가장자리에 붙여라"라는 뜻이기 때문이다. 이때 x_return에는 0이 들어가지만 <code>XNegative</code> 비트로 구별한다. 즉 음수 오프셋은 값 자체가 아니라 "오른쪽/아래에서부터 잰 거리"로 해석해야 한다. <code>XValue</code>나 <code>YValue</code>가 돌아오면 사용자가 위치를 정한 것이므로 그 위치에 창을 놓아야 한다(그리고 <code>XSizeHints</code>의 <code>USPosition</code>을 켠다).</p>
+<pre><code>int x = 0, y = 0;
+unsigned int wd = 400, ht = 300;            /* 기본값 */
+int m = XParseGeometry("200x100-10+20", &amp;x, &amp;y, &amp;wd, &amp;ht);
+/* m = WidthValue|HeightValue|XValue|YValue|XNegative, wd=200, ht=100, x=10, y=20 */
+if (m &amp; XNegative) x = DisplayWidth(d, s)  - wd - x;   /* 테두리 폭은 따로 고려 */
+if (m &amp; YNegative) y = DisplayHeight(d, s) - ht - y;</code></pre>
+<div class="tip">위 예처럼 음수 오프셋을 직접 계산하면 테두리 폭, 크기 증가 단위 등을 빠뜨리기 쉽다. 그 계산까지 해 주는 것이 아래의 <code>XWMGeometry</code>다.</div>
+
+<pre><code>int XWMGeometry(Display *display, int screen, char *user_geom, char *def_geom,
+                unsigned int bwidth, XSizeHints *hints, int *x_return, int *y_return,
+                int *width_return, int *height_return, int *gravity_return);</code></pre>
+<p>사용자가 준 geometry(user_geom, 예: 명령행 -geometry 값)와 프로그램 기본 geometry(def_geom), 그리고 크기 힌트(보통 WM_NORMAL_HINTS에 넣을 것)를 합쳐 최종 위치·크기·gravity를 계산한다. 사용자 값이 기본값보다 우선한다. gravity는 <code>NorthWestGravity</code>, <code>NorthEastGravity</code>, <code>SouthEastGravity</code>, <code>SouthWestGravity</code> 중 하나로, 음수 오프셋을 쓰면 해당 모서리 기준 gravity가 된다. 크기는 힌트의 base size(없으면 min size, 그것도 없으면 0)와 크기 증가 단위로 계산한다. 즉 "80x24"를 터미널의 글자 칸 수로 해석할 수 있다. min size가 없으면 base size를 쓴다. 반환값은 <code>XParseGeometry</code> 형식의 마스크로, 어떤 값이 사용자에게서 왔는지와 위치가 오른쪽/아래 기준인지를 알려 준다(이미 x_return, y_return에 반영되어 있음). 잘못된 geometry는 너비나 높이 0을 돌려줄 수 있다. gravity_return에 <code>&amp;hints-&gt;win_gravity</code>를 넘겨 힌트를 바로 갱신할 수 있다.</p>
+<pre><code>/* geom.c : ./a.out -geometry 300x200-0+0 */
+XSizeHints *sh = XAllocSizeHints();
+sh-&gt;flags = PMinSize | PBaseSize | PResizeInc;
+sh-&gt;min_width = sh-&gt;base_width = 0;
+sh-&gt;min_height = sh-&gt;base_height = 0;
+sh-&gt;width_inc = sh-&gt;height_inc = 1;
+
+int x, y, wd, ht;
+int m = XWMGeometry(d, s, user_geom /* NULL 가능 */, "400x300+0+0", 1, sh,
+                    &amp;x, &amp;y, &amp;wd, &amp;ht, &amp;sh-&gt;win_gravity);
+sh-&gt;flags |= PWinGravity;
+if (m &amp; (XValue | YValue))          sh-&gt;flags |= USPosition;
+if (m &amp; (WidthValue | HeightValue)) sh-&gt;flags |= USSize;
+
+Window w = XCreateSimpleWindow(d, RootWindow(d, s), x, y, wd, ht, 1,
+                               BlackPixel(d, s), WhitePixel(d, s));
+XSetWMNormalHints(d, w, sh);
+XFree(sh);</code></pre>
+
+<h3>16.5 영역(region) 다루기 <small>(Manipulating Regions)</small></h3>
+<p>Region은 임의의 픽셀 위치 집합이다. 사각형 여러 개나 다각형으로 이루어진 모양을 표현하고, 합집합·교집합 같은 집합 계산을 할 수 있다. 내부 구조를 감춘 불투명 타입 <code>Region</code>으로 <code>&lt;X11/Xutil.h&gt;</code>에 정의되어 있다. 계산은 모두 클라이언트 안에서 이뤄진다. 대표적인 쓰임은 다시 그릴 영역(Expose로 받은 사각형들)을 모아 클리핑하는 것이다.</p>
+
+<h4>만들기, 설정, 해제</h4>
+<pre><code>Region XCreateRegion(void);
+Region XPolygonRegion(XPoint points[], int n, int fill_rule);
+       XSetRegion(Display *display, GC gc, Region r);
+       XDestroyRegion(Region r);</code></pre>
+<ul>
+<li><code>XCreateRegion</code>: 빈 영역을 만든다.</li>
+<li><code>XPolygonRegion</code>: n개 점으로 된 다각형 영역을 만든다. fill_rule은 <code>EvenOddRule</code> 또는 <code>WindingRule</code>(의미는 <code>XCreateGC</code>의 fill rule과 같음. 자기 자신과 교차하는 다각형에서 안쪽 판정이 달라진다).</li>
+<li><code>XSetRegion</code>: GC의 clip-mask를 이 영역으로 정한다. 영역은 drawable 원점 기준이다. 결과 GC의 clip origin은 구현 의존이다. GC에 설정한 뒤에는 영역을 해제해도 된다.</li>
+<li><code>XDestroyRegion</code>: 영역의 메모리를 해제한다.</li>
+</ul>
+
+<h4>이동, 축소</h4>
+<pre><code>XOffsetRegion(Region r, int dx, int dy);
+XShrinkRegion(Region r, int dx, int dy);</code></pre>
+<p><code>XOffsetRegion</code>은 영역을 (dx, dy)만큼 옮긴다. <code>XShrinkRegion</code>은 영역을 줄인다. 양수면 줄이고 음수면 늘린다.</p>
+
+<h4>계산</h4>
+<pre><code>XClipBox(Region r, XRectangle *rect_return);
+XIntersectRegion(Region sra, Region srb, Region dr_return);
+XUnionRegion(Region sra, Region srb, Region dr_return);
+XUnionRectWithRegion(XRectangle *rectangle, Region src_region, Region dest_region_return);
+XSubtractRegion(Region sra, Region srb, Region dr_return);
+XXorRegion(Region sra, Region srb, Region dr_return);</code></pre>
+<table>
+<tr><th>함수</th><th>결과</th></tr>
+<tr><td><code>XClipBox</code></td><td>영역을 감싸는 가장 작은 사각형</td></tr>
+<tr><td><code>XIntersectRegion</code></td><td>sra ∩ srb</td></tr>
+<tr><td><code>XUnionRegion</code></td><td>sra ∪ srb</td></tr>
+<tr><td><code>XUnionRectWithRegion</code></td><td>사각형 ∪ src_region을 dest에</td></tr>
+<tr><td><code>XSubtractRegion</code></td><td>sra − srb</td></tr>
+<tr><td><code>XXorRegion</code></td><td>합집합 − 교집합 (둘 중 한쪽에만 있는 부분)</td></tr>
+</table>
+<div class="tip">결과를 받을 region(dr_return 등)은 미리 <code>XCreateRegion</code>으로 만들어 넘겨야 한다. 함수가 새로 만들어 주지 않는다. 입력과 결과에 같은 region을 넘겨 "누적"하는 식(<code>XUnionRectWithRegion(&amp;r, rg, rg)</code>)으로 흔히 쓴다.</div>
+
+<h4>비었는지, 같은지, 포함되는지</h4>
+<pre><code>Bool XEmptyRegion(Region r);
+Bool XEqualRegion(Region r1, Region r2);
+Bool XPointInRegion(Region r, int x, int y);
+int  XRectInRegion(Region r, int x, int y, unsigned int width, unsigned int height);</code></pre>
+<p><code>XEmptyRegion</code>은 비었으면 <code>True</code>. <code>XEqualRegion</code>은 두 영역의 위치·크기·모양이 같으면 <code>True</code>. <code>XPointInRegion</code>은 점 (x, y)가 영역 안이면 <code>True</code>. <code>XRectInRegion</code>은 사각형이 완전히 안이면 <code>RectangleIn</code>, 완전히 밖이면 <code>RectangleOut</code>, 걸쳐 있으면 <code>RectanglePart</code>를 돌려준다. 이것으로 "다시 그릴 영역에 이 물체가 걸치는가"를 판단해 그리기를 건너뛸 수 있다.</p>
+
+<h4>예제: Expose 사각형을 모아 한 번에 다시 그리기</h4>
+<pre><code>static Region damage;   /* main에서 damage = XCreateRegion(); */
+
+case Expose: {
+    XRectangle r;
+    r.x = ev.xexpose.x;          r.y = ev.xexpose.y;
+    r.width = ev.xexpose.width;  r.height = ev.xexpose.height;
+    XUnionRectWithRegion(&amp;r, damage, damage);
+    if (ev.xexpose.count != 0)
+        break;                   /* 뒤에 Expose가 더 남았으면 모으기만 */
+
+    XSetRegion(d, gc, damage);   /* 손상된 부분만 그리도록 클리핑 */
+    redraw_all(d, w, gc, damage);/* 안에서 XRectInRegion으로 건너뛰기 가능 */
+    XSetClipMask(d, gc, None);   /* 클리핑 해제 */
+
+    XDestroyRegion(damage);
+    damage = XCreateRegion();    /* 다음을 위해 비우기 */
+    break;
+}</code></pre>
+
+<h3>16.6 cut buffer 사용 <small>(Using Cut Buffers)</small></h3>
+<p>cut buffer는 아주 단순한 복사·붙여넣기 방식이다. 훨씬 강력한 selection(4.5절)이 있으므로 보통은 selection을 써야 하며, 여기서는 요약만 한다. cut buffer는 디스플레이의 첫 번째 루트 창에 붙은 속성으로 구현되고, STRING 인코딩의 텍스트만 담는다(Xlib은 저장·읽기 때 인코딩을 바꾸지 않음). 버퍼는 8개(0~7)이고 링처럼 돌리거나 번호로 직접 쓸 수 있다.</p>
+<pre><code>      XStoreBytes(Display *display, char *bytes, int nbytes);           /* 버퍼 0에 저장 */
+      XStoreBuffer(Display *display, char *bytes, int nbytes, int buffer);
+char *XFetchBytes(Display *display, int *nbytes_return);                /* 버퍼 0 읽기 */
+char *XFetchBuffer(Display *display, int *nbytes_return, int buffer);
+      XRotateBuffers(Display *display, int rotate);</code></pre>
+<ul>
+<li>저장 데이터는 널 문자를 포함해도 되고 널로 끝나지 않아도 된다(그래서 길이를 따로 준다). 잘못된 버퍼 번호면 <code>XStoreBuffer</code>는 아무 일도 하지 않는다. <code>BadAlloc</code> 가능.</li>
+<li><code>XFetchBytes</code>는 데이터가 있으면 바이트 수를 채우고 새로 할당한 메모리를 돌려준다(<code>XFree</code>로 해제). 없으면 NULL과 0. <code>XFetchBuffer</code>는 데이터가 없거나 번호가 잘못되면 nbytes_return에 0을 넣는다. 돌려받은 데이터는 널 종료가 보장되지 않으므로 길이를 써서 다룬다.</li>
+<li><code>XRotateBuffers</code>: 버퍼 0이 버퍼 n이 되고 1이 (n+1) mod 8이 되는 식으로 돌린다. 번호는 디스플레이 전체에 공통이다. 8개 중 하나라도 아직 만들어지지 않았으면 <code>BadMatch</code>가 난다.</li>
+</ul>
+
+<h3>16.7 알맞은 visual 고르기 <small>(Determining the Appropriate Visual Type)</small></h3>
+<p>한 디스플레이에 여러 화면이 있고, 각 화면은 여러 깊이에서 여러 visual(픽셀 값을 색으로 해석하는 방식: TrueColor, PseudoColor 등)을 지원할 수 있다. 앱에 맞는 visual을 찾는 함수다.</p>
+<pre><code>typedef struct {
+    Visual *visual;
+    VisualID visualid;
+    int screen;
+    unsigned int depth;
+    int class;
+    unsigned long red_mask, green_mask, blue_mask;
+    int colormap_size;
+    int bits_per_rgb;
+} XVisualInfo;
+
+/* 마스크: VisualNoMask VisualIDMask VisualScreenMask VisualDepthMask VisualClassMask
+   VisualRedMaskMask VisualGreenMaskMask VisualBlueMaskMask VisualColormapSizeMask
+   VisualBitsPerRGBMask VisualAllMask */
+
+XVisualInfo *XGetVisualInfo(Display *display, long vinfo_mask,
+                            XVisualInfo *vinfo_template, int *nitems_return);
+Status XMatchVisualInfo(Display *display, int screen, int depth, int class,
+                        XVisualInfo *vinfo_return);</code></pre>
+<p><code>XGetVisualInfo</code>는 vinfo_mask에 켠 필드만 vinfo_template과 비교해, 같은 visual들의 목록을 돌려준다. 없으면 NULL. 결과는 <code>XFree</code>로 해제한다. <code>XMatchVisualInfo</code>는 지정한 화면·깊이·클래스에 맞는 visual 하나를 찾아 vinfo_return에 채우고 0이 아닌 값을 돌려준다(없으면 0). 맞는 것이 여럿이면 어느 것이 선택될지는 정해져 있지 않다.</p>
+<pre><code>XVisualInfo vi;
+if (XMatchVisualInfo(d, s, 24, TrueColor, &amp;vi)) {
+    printf("visual 0x%lx, masks R=%lx G=%lx B=%lx\n",
+           vi.visualid, vi.red_mask, vi.green_mask, vi.blue_mask);
+    /* 기본 visual이 아니면 이 visual용 컬러맵을 만들어 창 생성 시 지정해야 한다 */
+}</code></pre>
+
+<h3>16.8 이미지 다루기 <small>(Manipulating Images)</small></h3>
+<p>이미지 조작은 모두 <code>XImage</code> 구조체(<code>&lt;X11/Xlib.h&gt;</code>, 상세는 8.7절)로 한다. 이미지 형식은 매우 다양하므로, 구조체가 저장 방식의 세부를 앱에서 감춘다. 제조사는 자기 하드웨어에서 흔한 형식에 대해 빠른 구현을 넣을 수 있다. 원문은 이 함수들이 일반적인 이미지 처리를 하기에 충분하지도 바람직하지도 않으며, 화면 형식 이미지에 대한 최소한의 기능일 뿐이라고 분명히 말한다. 이미지를 디스크 파일로 읽고 쓰는 함수도 없다.</p>
+<p>이미지를 서버에서 가져오고 보내는 기본 함수는 <code>XGetImage</code>와 <code>XPutImage</code>다(8장). <code>XImage</code>는 클라이언트 메모리 안의 이미지를 설명한다. height, width, xoffset 같은 일부 멤버는 서버로 보낼 때 바꿔 달라고 할 수 있고, bytes_per_line과 offset을 함께 쓰면 이미지 일부만 잘라 쓸 수 있다. byte order, bitmap_unit 같은 멤버는 이미지와 서버 모두의 특성이며, 서로 다르면 <code>XPutImage</code>가 알아서 변환한다. 평면(plane) n의 첫 줄 첫 바이트는 <code>data + (n * height * bytes_per_line)</code>에 있어야 한다.</p>
+
+<h4><code>XCreateImage</code></h4>
+<pre><code>XImage *XCreateImage(Display *display, Visual *visual, unsigned int depth, int format,
+                     int offset, char *data, unsigned int width, unsigned int height,
+                     int bitmap_pad, int bytes_per_line);</code></pre>
+<p><code>XImage</code> 구조체를 할당하고 디스플레이의 형식 값으로 초기화한다. <b>이미지 데이터 공간은 할당하지 않는다.</b> data에 직접 준비한 메모리를 넘긴다. byte order, bit order, bitmap unit은 디스플레이에서 가져오고, red/green/blue mask는 Z 형식에서만 의미가 있으며 넘긴 Visual에서 가져온다.</p>
+<ul>
+<li><code>format</code>: <code>XYBitmap</code>, <code>XYPixmap</code>, <code>ZPixmap</code>. 보통 컬러 이미지는 픽셀이 연속으로 저장되는 <code>ZPixmap</code>을 쓴다.</li>
+<li><code>offset</code>: 각 줄 앞에서 무시할 픽셀 수. 줄마다 비트를 밀지 않고 빠르게 표시하기 위한 것이다.</li>
+<li><code>bitmap_pad</code>: 한 줄의 단위(8, 16, 32비트). 줄과 줄의 시작이 이 비트 수의 배수만큼 떨어진다.</li>
+<li><code>bytes_per_line</code>: 한 줄 시작에서 다음 줄 시작까지 바이트 수. 0을 주면 줄들이 메모리에 연속해 있다고 보고 Xlib이 계산한다.</li>
+</ul>
+<div class="tip">가장 흔한 함정 두 가지. (1) <code>XCreateImage</code>, <code>XGetImage</code>, <code>XSubImage</code>로 만든 이미지에 <code>XDestroyImage</code>를 부르면 구조체와 함께 data가 가리키는 메모리도 해제된다. 그러므로 data에는 <code>malloc</code>한 메모리를 넘겨야 하고, 지역 배열이나 정적 배열을 넘긴 뒤 <code>XDestroyImage</code>를 부르면 프로그램이 망가진다(그런 경우 먼저 <code>img-&gt;data = NULL</code>로 만든 뒤 해제한다). (2) 24비트 화면의 ZPixmap은 보통 픽셀당 32비트(4바이트)다. 크기를 <code>width*height*3</code>으로 잡으면 넘친다. 안전하게는 bitmap_pad 32, bytes_per_line 0으로 만든 뒤 <code>img-&gt;bytes_per_line * height</code>만큼 할당한다.</div>
+
+<h4>픽셀 조작 매크로</h4>
+<p>아래 함수들은 실제로는 이미지 객체 안의 함수 포인터를 부르는 매크로이며 <code>&lt;X11/Xutil.h&gt;</code>에 정의되어 있다. 형식 차이를 감춰 주는 대신 픽셀 하나마다 함수 호출이 일어나 느리다.</p>
+<pre><code>unsigned long XGetPixel(XImage *ximage, int x, int y);
+              XPutPixel(XImage *ximage, int x, int y, unsigned long pixel);
+XImage       *XSubImage(XImage *ximage, int x, int y,
+                        unsigned int subimage_width, unsigned int subimage_height);
+              XAddPixel(XImage *ximage, long value);
+              XDestroyImage(XImage *ximage);</code></pre>
+<ul>
+<li><code>XGetPixel</code>: (x, y) 픽셀 값을 정규화된 형식(long의 최하위 바이트가 픽셀의 최하위 바이트)으로 돌려준다. 좌표는 이미지 안이어야 한다(검사하지 않음).</li>
+<li><code>XPutPixel</code>: (x, y) 픽셀을 덮어쓴다. 입력도 정규화된 형식이어야 한다.</li>
+<li><code>XSubImage</code>: 기존 이미지의 일부를 복사해 새 이미지를 만든다(새 구조체·데이터 할당). 사각형은 원본 안이어야 한다.</li>
+<li><code>XAddPixel</code>: 모든 픽셀에 상수를 더한다. 색 할당으로 얻은 base pixel을 이미지에 반영할 때 쓴다(14.3의 base_pixel 참고).</li>
+<li><code>XDestroyImage</code>: 이미지를 해제한다(위의 data 해제 주의).</li>
+</ul>
+
+<h4>예제: 그라데이션 이미지를 만들어 창에 그리기</h4>
+<pre><code>/* grad.c : cc grad.c -lX11  (TrueColor 24/32비트 화면 가정) */
+#include &lt;X11/Xlib.h&gt;
+#include &lt;X11/Xutil.h&gt;
+#include &lt;stdlib.h&gt;
+
+static int shift_of(unsigned long mask)      /* 마스크의 최하위 1비트 위치 */
+{
+    int s = 0;
+    while (mask &amp;&amp; !(mask &amp; 1)) { mask &gt;&gt;= 1; s++; }
+    return s;
+}
+
+int main(void)
+{
+    Display *d = XOpenDisplay(NULL);
+    if (!d) return 1;
+    int s = DefaultScreen(d);
+    Visual *vis = DefaultVisual(d, s);
+    int depth = DefaultDepth(d, s);
+    unsigned int W = 256, H = 256;
+
+    Window w = XCreateSimpleWindow(d, RootWindow(d, s), 0, 0, W, H, 0,
+                                   BlackPixel(d, s), BlackPixel(d, s));
+    XSelectInput(d, w, ExposureMask | KeyPressMask);
+    XMapWindow(d, w);
+
+    XImage *img = XCreateImage(d, vis, depth, ZPixmap, 0, NULL, W, H, 32, 0);
+    img-&gt;data = malloc(img-&gt;bytes_per_line * H);   /* XDestroyImage가 free함 */
+
+    int rs = shift_of(vis-&gt;red_mask), gs = shift_of(vis-&gt;green_mask),
+        bs = shift_of(vis-&gt;blue_mask);
+    for (unsigned int y = 0; y &lt; H; y++)
+        for (unsigned int x = 0; x &lt; W; x++) {
+            unsigned long p = ((unsigned long)x &lt;&lt; rs) |
+                              ((unsigned long)y &lt;&lt; gs) |
+                              ((unsigned long)128 &lt;&lt; bs);
+            XPutPixel(img, x, y, p);
+        }
+
+    GC gc = DefaultGC(d, s);
+    for (;;) {
+        XEvent ev;
+        XNextEvent(d, &amp;ev);
+        if (ev.type == Expose &amp;&amp; ev.xexpose.count == 0)
+            XPutImage(d, w, gc, img, 0, 0, 0, 0, W, H);
+        else if (ev.type == KeyPress)
+            break;
+    }
+    XDestroyImage(img);          /* 구조체 + data 해제 */
+    XCloseDisplay(d);
+    return 0;
+}</code></pre>
+<div class="tip">위 예는 각 색 마스크가 8비트라고 가정한다(흔한 24비트 TrueColor). 16비트 화면처럼 마스크 폭이 다르면 값을 마스크 폭에 맞게 줄여야 한다. 큰 이미지를 매 프레임 바꿀 때 <code>XPutPixel</code>은 느리므로, 형식을 확인한 뒤 <code>img-&gt;data</code>에 직접 쓰는 경우가 많다(이때는 byte_order, bits_per_pixel을 직접 처리해야 한다).</div>
+
+<h3>16.9 비트맵 다루기 <small>(Manipulating Bitmaps)</small></h3>
+<p>비트맵(깊이 1 픽스맵)을 파일에서 읽거나 파일로 쓰거나 데이터에서 만드는 함수들이다. 파일로 저장해 두면 나중에 다른 클라이언트나 다른 서버에서도 다시 쓸 수 있다. X11 비트맵 파일 형식은 그 자체로 C 소스다.</p>
+<pre><code>#define name_width width
+#define name_height height
+#define name_x_hot x          /* 선택: 핫스팟이 있을 때만 */
+#define name_y_hot y          /* 선택 */
+static unsigned char name_bits[] = { 0xNN, ... };</code></pre>
+<p>_x_hot/_y_hot 줄은 핫스팟(커서의 기준점 등)이 있을 때만 있고 나머지는 필수다. "unsigned"는 생략할 수 있다. _bits 배열은 크기에 맞을 만큼 커야 하며, 비트맵 단위는 8이다.</p>
+
+<pre><code>int XReadBitmapFile(Display *display, Drawable d, char *filename,
+                    unsigned int *width_return, unsigned int *height_return,
+                    Pixmap *bitmap_return, int *x_hot_return, int *y_hot_return);
+int XReadBitmapFileData(char *filename, unsigned int *width_return,
+                        unsigned int *height_return, unsigned char **data_return,
+                        int *x_hot_return, int *y_hot_return);
+int XWriteBitmapFile(Display *display, char *filename, Pixmap bitmap,
+                     unsigned int width, unsigned int height, int x_hot, int y_hot);</code></pre>
+<ul>
+<li><code>XReadBitmapFile</code>: 파일을 읽어(현재 로케일 인코딩으로 해석) 알맞은 크기의 픽스맵을 만들고 데이터를 넣어 돌려준다. d는 어느 화면인지 알려 주는 drawable이다. 반환값은 <code>BitmapSuccess</code>, <code>BitmapOpenFailed</code>(파일 열기 실패), <code>BitmapFileInvalid</code>(형식 오류), <code>BitmapNoMemory</code>. 핫스팟이 없으면 x_hot/y_hot에 -1, -1을 돌려준다. 다 쓴 픽스맵은 <code>XFreePixmap</code>으로 해제한다. <code>BadAlloc</code>, <code>BadDrawable</code>, <code>BadGC</code> 가능.</li>
+<li><code>XReadBitmapFileData</code>: 같은 방식으로 읽되 서버에 픽스맵을 만들지 않고 데이터를 직접 돌려준다. data_return은 <code>XFree</code>로 해제한다. (원문 시그니처에는 <code>unsigned char *data_return</code>으로 표기되어 있으나 데이터 포인터를 돌려받는 인자다.)</li>
+<li><code>XWriteBitmapFile</code>: 픽스맵을 X11 형식 파일로 쓴다. 파일 안의 이름(name_)은 파일 이름에서 디렉터리 부분을 뺀 것이다. x_hot, y_hot이 -1, -1이 아니면 핫스팟을 기록한다. 반환값은 <code>BitmapSuccess</code>, <code>BitmapOpenFailed</code>, <code>BitmapNoMemory</code>. <code>BadDrawable</code>, <code>BadMatch</code> 가능.</li>
+</ul>
+
+<pre><code>Pixmap XCreatePixmapFromBitmapData(Display *display, Drawable d, char *data,
+                                   unsigned int width, unsigned int height,
+                                   unsigned long fg, unsigned long bg, unsigned int depth);
+Pixmap XCreateBitmapFromData(Display *display, Drawable d, char *data,
+                             unsigned int width, unsigned int height);</code></pre>
+<ul>
+<li><code>XCreatePixmapFromBitmapData</code>: 지정한 깊이의 픽스맵을 만들고, 비트맵 데이터의 1은 fg, 0은 bg 픽셀로 해서 넣는다(비트맵 형식 <code>XPutImage</code>). 깊이는 그 화면이 지원해야 하며 아니면 <code>BadMatch</code>. 색이 있는 아이콘이나 배경 무늬를 만들 때 쓴다.</li>
+<li><code>XCreateBitmapFromData</code>: <code>XWriteBitmapFile</code>로 쓴 파일을 <code>#include</code>로 프로그램에 직접 넣고, 실행 시 파일을 읽지 않고 깊이 1 비트맵을 만든다. 메모리가 부족하면 <code>None</code>을 돌려준다. 다 쓰면 <code>XFreePixmap</code>.</li>
+</ul>
+<pre><code>/* 원문의 예: 회색 무늬 비트맵 */
+#include "gray.bitmap"
+Pixmap bitmap;
+bitmap = XCreateBitmapFromData(display, window, gray_bits, gray_width, gray_height);
+
+/* 직접 데이터로: 8x8 체크 무늬를 창 배경으로 */
+static char check_bits[] = { 0x55, 0xaa, 0x55, 0xaa, 0x55, 0xaa, 0x55, 0xaa };
+Pixmap pm = XCreatePixmapFromBitmapData(d, w, check_bits, 8, 8,
+                                        BlackPixel(d, s), WhitePixel(d, s),
+                                        DefaultDepth(d, s));
+XSetWindowBackgroundPixmap(d, w, pm);
+XClearWindow(d, w);
+XFreePixmap(d, pm);   /* 배경으로 설정한 뒤에는 해제해도 된다 */</code></pre>
+<div class="tip">비트맵 데이터는 각 줄이 바이트 단위로 채워지고, 각 바이트의 최하위 비트가 왼쪽 픽셀이다. 그래서 0x01은 "맨 왼쪽 한 점"이다. 직접 비트를 짤 때 좌우가 뒤집히는 실수가 흔하다.</div>
+
+<h3>16.10 컨텍스트 관리자 <small>(Using the Context Manager)</small></h3>
+<p>X 자원 ID(대개 창)에 프로그램 자신의 데이터를 연결해 두는 장치다. 예를 들어 이벤트를 받았을 때 <code>ev.xany.window</code>로 "이 창에 해당하는 내 구조체"를 바로 찾을 수 있다. 데이터는 서버의 속성이 아니라 내 프로그램 안에만 저장된다. 리소스 ID와 컨텍스트 타입, 두 개의 열쇠로 찾는 2차원 희소 배열이라고 생각하면 된다. 각 칸에는 데이터 포인터가 들어 있고, 한 ID에 타입별로 여러 데이터를 붙일 수 있다. 기호는 <code>&lt;X11/Xutil.h&gt;</code>에 있다.</p>
+<pre><code>XContext XUniqueContext(void);
+int XSaveContext(Display *display, XID rid, XContext context, XPointer data);
+int XFindContext(Display *display, XID rid, XContext context, XPointer *data_return);
+int XDeleteContext(Display *display, XID rid, XContext context);</code></pre>
+<ul>
+<li><code>XUniqueContext</code>: 새 고유 컨텍스트 타입을 만든다.</li>
+<li><code>XSaveContext</code>: (rid, context)에 data를 저장한다. 이미 있으면 덮어쓴다. 성공 0, 오류면 0이 아닌 값(<code>XCNOMEM</code>: 메모리 부족).</li>
+<li><code>XFindContext</code>: 저장된 데이터를 찾아 data_return에 넣는다. 성공 0, 없으면 <code>XCNOENT</code>.</li>
+<li><code>XDeleteContext</code>: 항목을 지운다. 오류 코드는 <code>XFindContext</code>와 같다. 저장해 둔 데이터 자체는 해제하지 않는다.</li>
+</ul>
+<pre><code>typedef struct { const char *label; int clicks; } Button;
+
+static XContext ctx;   /* main에서 ctx = XUniqueContext(); */
+
+void attach(Display *d, Window w, Button *b)
+{
+    XSaveContext(d, w, ctx, (XPointer)b);
+}
+
+/* 이벤트 루프에서 */
+case ButtonPress: {
+    Button *b;
+    if (XFindContext(d, ev.xany.window, ctx, (XPointer *)&amp;b) == 0) {
+        b-&gt;clicks++;
+        printf("%s clicked %d times\n", b-&gt;label, b-&gt;clicks);
+    }
+    break;
+}
+
+/* 창을 없앨 때 */
+XDeleteContext(d, w, ctx);
+free(b);               /* 데이터는 직접 해제 */
+XDestroyWindow(d, w);</code></pre>
+<div class="tip">반환값의 의미가 반대처럼 느껴질 수 있다. <code>XFindContext</code>는 <b>0이 성공</b>이다(많은 Xlib 함수의 Status는 0이 실패인 것과 다름). 창을 없앨 때 <code>XDeleteContext</code>를 빼먹으면, 나중에 같은 ID가 다른 창에 재사용되었을 때 엉뚱한 데이터를 찾게 될 수 있다.</div>
+</section><div class="pager"><a href="ch15.html">← 15장. 리소스 관리자 함수 (Resource Manager Functions)</a><a href="./">차례</a><a href="apA.html">부록 A. Xlib 함수와 프로토콜 요청 (Xlib Functions and Protocol Requests) →</a></div>
+<a class="top" href="#">↑ 위로</a>
+</html>

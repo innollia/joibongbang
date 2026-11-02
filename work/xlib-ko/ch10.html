@@ -1,0 +1,843 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>10장. 이벤트 (Events) — Xlib 한국어</title>
+<style>
+body{font:16px/1.75 system-ui,"Malgun Gothic",sans-serif;max-width:860px;margin:40px auto;padding:0 16px;background:#111;color:#e8e8e8}
+a{color:#7cf} h1{line-height:1.3} h2{margin-top:3em;border-bottom:1px solid #444;padding-bottom:.3em} h2 small{color:#999;font-weight:normal;font-size:.6em}
+h3{margin-top:2em;color:#fd8} h4{color:#9df}
+code{font-family:ui-monospace,Consolas,monospace;font-size:.92em;background:#222;padding:1px 4px;border-radius:3px}
+pre{background:#1b1d22;border:1px solid #333;padding:12px;overflow-x:auto;border-radius:6px;line-height:1.45} pre code{background:none;padding:0}
+.tip{background:#1d2a1d;border-left:4px solid #6c6;padding:8px 12px;margin:1em 0;border-radius:4px}
+table{border-collapse:collapse;margin:1em 0;font-size:.92em;display:block;overflow-x:auto} td,th{border:1px solid #444;padding:4px 8px;vertical-align:top} th{background:#222}
+nav ol{columns:2} .top{position:fixed;right:16px;bottom:16px;background:#333;padding:6px 10px;border-radius:6px;text-decoration:none}
+.pager{display:flex;justify-content:space-between;gap:12px;margin:2em 0;padding-top:1em;border-top:1px solid #444} .pager a{text-decoration:none}
+</style>
+<p><a href="../../">← 조이봉방</a> · <a href="./">Xlib 번역 차례</a></p><div class="pager"><a href="ch9.html">← 9장. 윈도 매니저·세션 매니저 함수 (Window and Session Manager Functions)</a><a href="./">차례</a><a href="ch11.html">11장. 이벤트 처리 함수 (Event Handling Functions) →</a></div><section id="ch10"><h2 style="margin-top:1em">10장. 이벤트 <small>(Events)</small></h2>
+
+<p>클라이언트는 <code>XOpenDisplay</code>로 연 연결 하나로 X 서버와 이야기한다. 클라이언트가 Xlib 함수를 부르면 그 함수가 요청(request)을 만들어 이 연결로 보낸다. 반대 방향으로는 서버가 이벤트를 보낸다. 이벤트는 두 가지 이유로 생긴다. 하나는 사용자가 키를 누르거나 마우스를 움직이는 것처럼 장치에서 일이 생길 때이고, 다른 하나는 클라이언트가 보낸 요청의 부수 효과(예: 창을 매핑하면 <code>MapNotify</code>, 창이 드러나면 <code>Expose</code>)다. 이벤트는 요청과 같은 연결로, 언제든 비동기적으로 도착한다.</p>
+<p>이 장은 이벤트의 종류, 구조체, 마스크, 그리고 서버가 각 이벤트를 언제 어떻게 만드는지를 다룬다. 이벤트를 실제로 꺼내 쓰는 함수(<code>XNextEvent</code> 등)는 11장에서 다룬다.</p>
+
+<h3>10.1 이벤트 타입</h3>
+<p>이벤트는 X 서버가 비동기적으로 만들어 내는 데이터다. X의 기본 원칙은 "물어본 것만 알려 준다"이다. 서버는 클라이언트가 어떤 창에 대해 그 종류의 이벤트를 원한다고 등록했을 때만 그 이벤트를 보낸다. 등록은 보통 창의 <code>event-mask</code> 속성을 설정해서 한다. 창을 만들 때 정해도 되고, 나중에 바꿔도 된다.</p>
+<p>왜 이렇게 할까? X는 네트워크 너머에서도 동작하도록 설계되었다. 마우스를 움직일 때마다 모든 클라이언트에게 이벤트를 쏟아부으면 네트워크와 클라이언트가 감당하지 못한다. 그래서 필요한 것만 골라 받게 한다.</p>
+<p>키보드·마우스처럼 장치에서 생긴 이벤트는 원래 생긴 창(source window)에서 시작해 부모 쪽으로 올라가며(전파, propagation) 그 이벤트를 원하는 클라이언트가 있는 창을 찾는다. 창 속성의 <code>do-not-propagate</code> 마스크로 이 전파를 막을 수도 있다. 예외로 <code>MappingNotify</code>는 등록 여부와 상관없이 항상 모든 클라이언트에게 간다.</p>
+<p>각 이벤트 타입마다 <code>&lt;X11/X.h&gt;</code>에 상수 이름이 정의되어 있다. 분류는 다음과 같다.</p>
+<table>
+<tr><th>분류</th><th>이벤트 타입</th><th>한 줄 설명</th></tr>
+<tr><td>키보드 이벤트</td><td><code>KeyPress</code>, <code>KeyRelease</code></td><td>키를 누름/뗌</td></tr>
+<tr><td>포인터 이벤트</td><td><code>ButtonPress</code>, <code>ButtonRelease</code>, <code>MotionNotify</code></td><td>마우스 버튼 누름/뗌, 포인터 이동</td></tr>
+<tr><td>창 경계 통과 이벤트</td><td><code>EnterNotify</code>, <code>LeaveNotify</code></td><td>포인터가 창에 들어옴/나감</td></tr>
+<tr><td>입력 포커스 이벤트</td><td><code>FocusIn</code>, <code>FocusOut</code></td><td>키보드 포커스를 얻음/잃음</td></tr>
+<tr><td>키맵 상태 알림</td><td><code>KeymapNotify</code></td><td>지금 눌려 있는 키 전체 상태</td></tr>
+<tr><td>노출(exposure) 이벤트</td><td><code>Expose</code>, <code>GraphicsExpose</code>, <code>NoExpose</code></td><td>다시 그려야 할 영역이 생김</td></tr>
+<tr><td>구조 제어 이벤트</td><td><code>CirculateRequest</code>, <code>ConfigureRequest</code>, <code>MapRequest</code>, <code>ResizeRequest</code></td><td>다른 클라이언트의 창 조작 요청을 가로챔(주로 창 관리자용)</td></tr>
+<tr><td>창 상태 알림 이벤트</td><td><code>CirculateNotify</code>, <code>ConfigureNotify</code>, <code>CreateNotify</code>, <code>DestroyNotify</code>, <code>GravityNotify</code>, <code>MapNotify</code>, <code>MappingNotify</code>, <code>ReparentNotify</code>, <code>UnmapNotify</code>, <code>VisibilityNotify</code></td><td>창의 크기·위치·매핑 상태 등이 실제로 바뀜</td></tr>
+<tr><td>컬러맵 상태 알림</td><td><code>ColormapNotify</code></td><td>창의 컬러맵이 바뀌거나 설치/해제됨</td></tr>
+<tr><td>클라이언트 간 통신 이벤트</td><td><code>ClientMessage</code>, <code>PropertyNotify</code>, <code>SelectionClear</code>, <code>SelectionNotify</code>, <code>SelectionRequest</code></td><td>다른 프로그램과 데이터·메시지 주고받기</td></tr>
+</table>
+
+<h3>10.2 이벤트 구조체</h3>
+<p>이벤트 타입마다 대응하는 구조체가 <code>&lt;X11/Xlib.h&gt;</code>에 선언되어 있다. 모든 이벤트 구조체는 앞부분이 똑같다. 이 공통 부분만 떼어 놓은 것이 <code>XAnyEvent</code>다.</p>
+<pre><code>typedef struct {
+     int           type;
+     unsigned long serial;     /* 서버가 마지막으로 처리한 요청 번호 */
+     Bool          send_event; /* SendEvent 요청으로 온 것이면 True */
+     Display       *display;   /* 이벤트를 읽어 온 디스플레이 */
+     Window        window;
+} XAnyEvent;</code></pre>
+<ul>
+<li><code>type</code>: 이벤트 종류 상수(예: <code>GraphicsExpose</code>). 이 값을 보고 어떤 구조체로 읽을지 정한다.</li>
+<li><code>serial</code>: 이 이벤트가 생길 때 서버가 마지막으로 처리한 요청의 일련번호. 프로토콜에서는 하위 16비트만 오지만 Xlib이 전체 32비트 값으로 늘려 준다. 어떤 요청 이후에 생긴 이벤트인지 가릴 때 쓴다.</li>
+<li><code>send_event</code>: 서버가 스스로 만든 것이 아니라 다른 클라이언트가 <code>XSendEvent</code>로 보낸 것이면 <code>True</code>. 진짜 키 입력인지 가짜인지 구분할 수 있다.</li>
+<li><code>display</code>: 이벤트를 읽어 온 디스플레이 포인터.</li>
+<li><code>window</code>: 툴킷의 디스패처(창별로 처리 함수를 찾아 부르는 코드)에 가장 쓸모 있는 창. 이벤트마다 의미가 조금 다르다.</li>
+</ul>
+<p>서버는 입력 스트림 어디에든 이벤트를 끼워 보낼 수 있다. 그래서 Xlib이 어떤 요청의 응답(reply)을 기다리는 동안 이벤트가 먼저 도착하면, Xlib은 그 이벤트를 버리지 않고 <b>이벤트 큐</b>에 쌓아 둔다. 나중에 11장의 함수로 큐에서 꺼낸다.</p>
+<p>개별 구조체 외에, 모든 이벤트 구조체를 하나로 묶은 공용체(union) <code>XEvent</code>가 있다.</p>
+<pre><code>typedef union _XEvent {
+     int                            type;          /* 바꾸면 안 됨 */
+     XAnyEvent                      xany;
+     XKeyEvent                      xkey;
+     XButtonEvent                   xbutton;
+     XMotionEvent                   xmotion;
+     XCrossingEvent                 xcrossing;
+     XFocusChangeEvent              xfocus;
+     XExposeEvent                   xexpose;
+     XGraphicsExposeEvent           xgraphicsexpose;
+     XNoExposeEvent                 xnoexpose;
+     XVisibilityEvent               xvisibility;
+     XCreateWindowEvent             xcreatewindow;
+     XDestroyWindowEvent            xdestroywindow;
+     XUnmapEvent                    xunmap;
+     XMapEvent                      xmap;
+     XMapRequestEvent               xmaprequest;
+     XReparentEvent                 xreparent;
+     XConfigureEvent                xconfigure;
+     XGravityEvent                  xgravity;
+     XResizeRequestEvent            xresizerequest;
+     XConfigureRequestEvent         xconfigurerequest;
+     XCirculateEvent                xcirculate;
+     XCirculateRequestEvent         xcirculaterequest;
+     XPropertyEvent                 xproperty;
+     XSelectionClearEvent           xselectionclear;
+     XSelectionRequestEvent         xselectionrequest;
+     XSelectionEvent                xselection;
+     XColormapEvent                 xcolormap;
+     XClientMessageEvent            xclient;
+     XMappingEvent                  xmapping;
+     XErrorEvent                    xerror;
+     XKeymapEvent                   xkeymap;
+     long                           pad[24];
+} XEvent;</code></pre>
+<p>왜 공용체인가? 이벤트를 받는 쪽은 무슨 이벤트가 올지 미리 모른다. 그래서 가장 큰 이벤트도 담을 수 있는 그릇 하나(<code>XEvent</code>)를 준비해 받고, <code>type</code>을 본 뒤 알맞은 멤버(<code>xkey</code>, <code>xbutton</code> 등)로 읽는다. 공용체이므로 모든 멤버가 같은 메모리를 공유한다. 첫 5개 필드(<code>type</code>, <code>serial</code>, <code>send_event</code>, <code>display</code>, <code>window</code>)의 순서는 모든 구조체에서 같고, 툴킷이 깨지지 않도록 앞으로도 바뀌지 않는다. 그래서 어떤 이벤트든 <code>ev.xany.window</code>로 창을 읽을 수 있다(단, <code>KeymapNotify</code>의 window는 쓰이지 않는다). <code>pad[24]</code>는 확장 이벤트를 담을 여유 공간이다. 대부분의 이벤트에는 사건이 일어난 시각인 <code>time</code> 멤버도 있다.</p>
+<pre><code>XEvent ev;
+XNextEvent(dpy, &amp;ev);
+switch (ev.type) {
+case KeyPress:
+    printf("keycode=%u state=0x%x\n", ev.xkey.keycode, ev.xkey.state);
+    break;
+case ButtonPress:
+    printf("button %u at (%d,%d)\n", ev.xbutton.button, ev.xbutton.x, ev.xbutton.y);
+    break;
+case Expose:
+    if (ev.xexpose.count == 0) redraw(ev.xexpose.window);
+    break;
+}</code></pre>
+<div class="tip">함정: <code>type</code>을 확인하지 않고 엉뚱한 멤버를 읽으면 컴파일은 되지만 쓰레기 값을 얻는다. 또 <code>XEvent</code> 대신 작은 구조체(예: <code>XKeyEvent</code>) 변수에 <code>XNextEvent</code>로 받으면 더 큰 이벤트가 올 때 메모리가 넘친다. 받을 때는 항상 <code>XEvent</code>를 쓴다. 특정 구조체 포인터가 필요하면 <code>XKeyEvent *k = &amp;ev.xkey;</code>처럼 공용체 멤버의 주소를 쓴다(원문 표현으로는 "일반 이벤트 포인터는 캐스트한 뒤에 다른 정보에 접근해야 한다").</div>
+
+<h3>10.3 이벤트 마스크</h3>
+<p>대부분의 이벤트는 "어느 창에 대해" 받을지를 정해 등록한다. <code>event_mask</code> 인자를 받는 함수(<code>XSelectInput</code>, <code>XCreateWindow</code>의 속성 등)에 마스크를 넘긴다. 마스크의 비트는 <code>&lt;X11/X.h&gt;</code>에 정의되어 있고, 여러 개를 <code>|</code>로 묶는다.</p>
+<p>등록하지 않으면 대부분의 이벤트는 생겨도 보고되지 않는다. 다만 몇 가지 예외가 있다.</p>
+<ul>
+<li><code>GraphicsExpose</code>와 <code>NoExpose</code>는 마스크가 아니라 GC의 graphics-exposures 값으로 정해진다. 기본값이 켜져 있으므로 <code>XCopyArea</code>/<code>XCopyPlane</code>을 쓰면 기본으로 온다. 원하지 않으면 GC에서 <code>False</code>로 끈다.</li>
+<li><code>SelectionClear</code>, <code>SelectionRequest</code>, <code>SelectionNotify</code>, <code>ClientMessage</code>는 마스크로 끌 수 없다. 셀렉션 관련 이벤트는 셀렉션에 참여하는 클라이언트에게만 간다.</li>
+<li>키보드·포인터 매핑이 바뀌면 <code>MappingNotify</code>가 항상 모두에게 간다.</li>
+</ul>
+<table>
+<tr><th>마스크</th><th>언제 지정하나</th></tr>
+<tr><td><code>NoEventMask</code></td><td>이벤트를 하나도 받지 않음</td></tr>
+<tr><td><code>KeyPressMask</code></td><td>키 누름</td></tr>
+<tr><td><code>KeyReleaseMask</code></td><td>키 뗌</td></tr>
+<tr><td><code>ButtonPressMask</code></td><td>포인터 버튼 누름</td></tr>
+<tr><td><code>ButtonReleaseMask</code></td><td>포인터 버튼 뗌</td></tr>
+<tr><td><code>EnterWindowMask</code></td><td>포인터가 창에 들어옴</td></tr>
+<tr><td><code>LeaveWindowMask</code></td><td>포인터가 창에서 나감</td></tr>
+<tr><td><code>PointerMotionMask</code></td><td>포인터 이동(버튼 상태 무관)</td></tr>
+<tr><td><code>PointerMotionHintMask</code></td><td>이동 "힌트"만(이동 이벤트를 줄임)</td></tr>
+<tr><td><code>Button1MotionMask</code> ~ <code>Button5MotionMask</code></td><td>해당 버튼을 누른 채 이동</td></tr>
+<tr><td><code>ButtonMotionMask</code></td><td>아무 버튼이나 누른 채 이동</td></tr>
+<tr><td><code>KeymapStateMask</code></td><td>창 진입·포커스 획득 때 키보드 상태</td></tr>
+<tr><td><code>ExposureMask</code></td><td>모든 노출(다시 그리기 필요)</td></tr>
+<tr><td><code>VisibilityChangeMask</code></td><td>가려짐 정도의 변화</td></tr>
+<tr><td><code>StructureNotifyMask</code></td><td>이 창 자체의 구조 변화</td></tr>
+<tr><td><code>ResizeRedirectMask</code></td><td>이 창의 크기 변경 요청을 가로챔</td></tr>
+<tr><td><code>SubstructureNotifyMask</code></td><td>자식 창들의 구조 변화</td></tr>
+<tr><td><code>SubstructureRedirectMask</code></td><td>자식 창에 대한 구조 요청을 가로챔</td></tr>
+<tr><td><code>FocusChangeMask</code></td><td>입력 포커스 변화</td></tr>
+<tr><td><code>PropertyChangeMask</code></td><td>프로퍼티 변화</td></tr>
+<tr><td><code>ColormapChangeMask</code></td><td>컬러맵 변화</td></tr>
+<tr><td><code>OwnerGrabButtonMask</code></td><td>자동 그랩이 owner_events=True로 걸리게 함</td></tr>
+</table>
+<div class="tip">"Notify"는 이미 일어난 일을 알려 주는 것이고, "Redirect"는 일어나기 전에 가로채서 대신 알려 주는 것이다. Redirect를 걸면 그 요청은 실행되지 않는다. 일반 앱은 Redirect 마스크를 쓸 일이 거의 없고, 창 관리자가 쓴다.</div>
+
+<h3>10.4 이벤트 처리 개요</h3>
+<p>마스크와 이벤트 타입의 관계는 세 가지 경우가 있다.</p>
+<ul>
+<li>일대일: <code>ButtonPressMask</code>를 주면 <code>ButtonPress</code>만 온다.</li>
+<li>하나의 마스크가 여러 타입: <code>SubstructureNotifyMask</code>를 주면 <code>CirculateNotify</code>, <code>ConfigureNotify</code>, <code>CreateNotify</code>, <code>DestroyNotify</code>, <code>GravityNotify</code>, <code>MapNotify</code>, <code>ReparentNotify</code>, <code>UnmapNotify</code>가 올 수 있다.</li>
+<li>여러 마스크가 하나의 타입: <code>PointerMotionMask</code>든 <code>ButtonMotionMask</code>든 오는 것은 <code>MotionNotify</code>다.</li>
+</ul>
+<p>아래 표는 마스크 → 이벤트 타입 → 구조체 이름 → 공용 구조체의 대응이다. 일부 구조체는 두 타입이 같이 쓰는 공용 구조체의 typedef다. N.A.는 해당 없음.</p>
+<table>
+<tr><th>이벤트 마스크</th><th>이벤트 타입</th><th>구조체</th><th>공용 구조체</th></tr>
+<tr><td><code>ButtonMotionMask</code>, <code>Button1MotionMask</code>~<code>Button5MotionMask</code></td><td><code>MotionNotify</code></td><td><code>XPointerMovedEvent</code></td><td><code>XMotionEvent</code></td></tr>
+<tr><td><code>ButtonPressMask</code></td><td><code>ButtonPress</code></td><td><code>XButtonPressedEvent</code></td><td><code>XButtonEvent</code></td></tr>
+<tr><td><code>ButtonReleaseMask</code></td><td><code>ButtonRelease</code></td><td><code>XButtonReleasedEvent</code></td><td><code>XButtonEvent</code></td></tr>
+<tr><td><code>ColormapChangeMask</code></td><td><code>ColormapNotify</code></td><td><code>XColormapEvent</code></td><td></td></tr>
+<tr><td><code>EnterWindowMask</code></td><td><code>EnterNotify</code></td><td><code>XEnterWindowEvent</code></td><td><code>XCrossingEvent</code></td></tr>
+<tr><td><code>LeaveWindowMask</code></td><td><code>LeaveNotify</code></td><td><code>XLeaveWindowEvent</code></td><td><code>XCrossingEvent</code></td></tr>
+<tr><td><code>ExposureMask</code></td><td><code>Expose</code></td><td><code>XExposeEvent</code></td><td></td></tr>
+<tr><td>GC의 GCGraphicsExposures</td><td><code>GraphicsExpose</code>, <code>NoExpose</code></td><td><code>XGraphicsExposeEvent</code>, <code>XNoExposeEvent</code></td><td></td></tr>
+<tr><td><code>FocusChangeMask</code></td><td><code>FocusIn</code>, <code>FocusOut</code></td><td><code>XFocusInEvent</code>, <code>XFocusOutEvent</code></td><td><code>XFocusChangeEvent</code></td></tr>
+<tr><td><code>KeymapStateMask</code></td><td><code>KeymapNotify</code></td><td><code>XKeymapEvent</code></td><td></td></tr>
+<tr><td><code>KeyPressMask</code></td><td><code>KeyPress</code></td><td><code>XKeyPressedEvent</code></td><td><code>XKeyEvent</code></td></tr>
+<tr><td><code>KeyReleaseMask</code></td><td><code>KeyRelease</code></td><td><code>XKeyReleasedEvent</code></td><td><code>XKeyEvent</code></td></tr>
+<tr><td><code>OwnerGrabButtonMask</code></td><td>N.A.</td><td>N.A.</td><td></td></tr>
+<tr><td><code>PointerMotionMask</code></td><td><code>MotionNotify</code></td><td><code>XPointerMovedEvent</code></td><td><code>XMotionEvent</code></td></tr>
+<tr><td><code>PointerMotionHintMask</code></td><td>N.A.</td><td>N.A.</td><td></td></tr>
+<tr><td><code>PropertyChangeMask</code></td><td><code>PropertyNotify</code></td><td><code>XPropertyEvent</code></td><td></td></tr>
+<tr><td><code>ResizeRedirectMask</code></td><td><code>ResizeRequest</code></td><td><code>XResizeRequestEvent</code></td><td></td></tr>
+<tr><td><code>StructureNotifyMask</code></td><td><code>CirculateNotify</code>, <code>ConfigureNotify</code>, <code>DestroyNotify</code>, <code>GravityNotify</code>, <code>MapNotify</code>, <code>ReparentNotify</code>, <code>UnmapNotify</code></td><td><code>XCirculateEvent</code>, <code>XConfigureEvent</code>, <code>XDestroyWindowEvent</code>, <code>XGravityEvent</code>, <code>XMapEvent</code>, <code>XReparentEvent</code>, <code>XUnmapEvent</code></td><td></td></tr>
+<tr><td><code>SubstructureNotifyMask</code></td><td>위 7개 + <code>CreateNotify</code></td><td>위 7개 + <code>XCreateWindowEvent</code></td><td></td></tr>
+<tr><td><code>SubstructureRedirectMask</code></td><td><code>CirculateRequest</code>, <code>ConfigureRequest</code>, <code>MapRequest</code></td><td><code>XCirculateRequestEvent</code>, <code>XConfigureRequestEvent</code>, <code>XMapRequestEvent</code></td><td></td></tr>
+<tr><td><code>VisibilityChangeMask</code></td><td><code>VisibilityNotify</code></td><td><code>XVisibilityEvent</code></td><td></td></tr>
+<tr><td>N.A.(항상 옴)</td><td><code>ClientMessage</code>, <code>MappingNotify</code>, <code>SelectionClear</code>, <code>SelectionNotify</code>, <code>SelectionRequest</code></td><td><code>XClientMessageEvent</code>, <code>XMappingEvent</code>, <code>XSelectionClearEvent</code>, <code>XSelectionEvent</code>, <code>XSelectionRequestEvent</code></td><td></td></tr>
+</table>
+<div class="tip"><code>CreateNotify</code>는 <code>StructureNotifyMask</code>로는 받을 수 없다. 창이 만들어지기 전에는 그 창에 마스크를 걸 수 없으니 당연하다. 부모 창에 <code>SubstructureNotifyMask</code>를 걸어야 자식 생성을 알 수 있다.</div>
+
+<h3>이벤트 전파(propagation) 정리</h3>
+<p>키보드·포인터 계열(<code>KeyPress</code>, <code>KeyRelease</code>, <code>ButtonPress</code>, <code>ButtonRelease</code>, <code>MotionNotify</code>) 이벤트가 어느 창으로 보고되는지는 다음 규칙으로 정해진다(10.5절 원문 내용을 모아 정리).</p>
+<ol>
+<li>이벤트의 원천(source)은 포인터가 들어 있는, 보이는(viewable) 가장 안쪽 창이다.</li>
+<li>서버는 원천 창부터 위(부모, 조부모...)로 올라가며, 어떤 클라이언트든 그 이벤트 종류를 등록한 첫 번째 창을 찾는다. 그 창이 "이벤트 창"이 되고, 이벤트 구조체의 <code>window</code>에 들어간다.</li>
+<li>올라가는 길에 있는 창의 <code>do-not-propagate</code> 마스크에 그 종류가 들어 있으면 거기서 이벤트가 사라진다.</li>
+<li>능동 그랩(active grab)이 걸려 있으면 그랩한 클라이언트·창으로 보고된다. 키보드 이벤트는 포커스 창의 영향도 받는다.</li>
+</ol>
+<p>원천 창이 이벤트 창의 자손이면, <code>subwindow</code>에 "이벤트 창의 자식 가운데 원천 창이거나 원천 창의 조상인 것"이 들어간다. 그래서 부모 창 하나만 등록해 두고도 <code>subwindow</code>를 보고 어느 자식 위에서 클릭했는지 알 수 있다.</p>
+<pre><code>/* 자식 창이 클릭을 받지 않게 하고 부모에서 한꺼번에 처리 */
+XSetWindowAttributes a;
+a.do_not_propagate_mask = 0;          /* 자식은 아무것도 막지 않음 */
+a.event_mask = 0;                     /* 자식은 ButtonPress를 등록하지 않음 */
+XChangeWindowAttributes(dpy, child, CWEventMask | CWDontPropagate, &amp;a);
+XSelectInput(dpy, parent, ButtonPressMask);
+/* parent에서 받은 ev.xbutton.subwindow == child 이면 child 위의 클릭 */</code></pre>
+<div class="tip">전파는 장치 이벤트(키·버튼·이동)에만 해당한다. <code>Expose</code>, <code>ConfigureNotify</code> 같은 이벤트는 위로 올라가지 않는다. 부모에서 자식의 구조 변화를 보려면 <code>SubstructureNotifyMask</code>를 따로 건다.</div>
+
+<h3>10.5 키보드와 포인터 이벤트</h3>
+<h4>포인터 버튼 이벤트와 자동 그랩</h4>
+<p>능동 포인터 그랩이 없는 상태에서 포인터가 창 w 안에 있을 때 버튼을 누르면 서버는 이렇게 한다. 먼저 루트부터 w까지 조상을 위에서 아래로 훑으며 활성화할 수동 그랩(passive grab, <code>XGrabButton</code>으로 미리 걸어 둔 것)을 찾는다. 맞는 것이 없으면 이벤트를 받는 클라이언트를 위해 <b>자동으로 능동 그랩</b>을 시작하고, last-pointer-grab 시각을 현재 서버 시각으로 정한다. 이것은 다음 인자로 <code>XGrabButton</code>을 부른 것과 거의 같다.</p>
+<table>
+<tr><th>인자</th><th>값</th></tr>
+<tr><td><code>w</code></td><td>이벤트 창</td></tr>
+<tr><td><code>event_mask</code></td><td>그 클라이언트가 이벤트 창에 등록한 포인터 이벤트들</td></tr>
+<tr><td><code>pointer_mode</code></td><td><code>GrabModeAsync</code></td></tr>
+<tr><td><code>keyboard_mode</code></td><td><code>GrabModeAsync</code></td></tr>
+<tr><td><code>owner_events</code></td><td>이벤트 창에 <code>OwnerGrabButtonMask</code>를 등록했으면 <code>True</code>, 아니면 <code>False</code></td></tr>
+<tr><td><code>confine_to</code></td><td><code>None</code></td></tr>
+<tr><td><code>cursor</code></td><td><code>None</code></td></tr>
+</table>
+<p>이 자동 그랩은 모든 버튼이 (논리적으로) 떼어지면 저절로 끝난다. <code>XUngrabPointer</code>나 <code>XChangeActivePointerGrab</code>으로 도중에 바꿀 수 있다.</p>
+<p>왜 이런 장치가 있을까? 버튼을 누른 채 창 밖으로 드래그해도 누른 창이 <code>ButtonRelease</code>와 이동 이벤트를 계속 받게 하려는 것이다. 버튼을 누른 창이 떼는 것도 확실히 알아야 버튼 "눌림" 표시를 되돌릴 수 있다.</p>
+<div class="tip"><code>ButtonPressMask</code>는 한 창에 한 클라이언트만 등록할 수 있다(11장 참고). 자동 그랩이 누구 것인지 하나로 정해져야 하기 때문이다.</div>
+
+<h4>키·버튼·이동 이벤트</h4>
+<p>서버는 키나 버튼의 상태가 <b>논리적으로</b> 바뀌면 <code>KeyPress</code>/<code>KeyRelease</code>, <code>ButtonPress</code>/<code>ButtonRelease</code>를 보고한다. 키 이벤트는 Shift·Ctrl 같은 모디파이어 키에도 생긴다. 포인터가 논리적으로 움직이면 <code>MotionNotify</code>를 보고하는데, 이동이 한 창 안에서 시작하고 끝날 때만 생긴다(창을 넘나드는 것은 Enter/Leave가 맡는다). 이동 이벤트의 촘촘함은 보장되지 않지만, 포인터가 움직였다가 멈추면 적어도 하나는 받는 것이 보장된다. 그랩 때문에 장치 이벤트 처리가 얼어(frozen) 있으면 논리적 변화는 물리적 변화보다 늦게 생긴다.</p>
+<p>받으려면 창의 event-mask에 <code>KeyPressMask</code>, <code>KeyReleaseMask</code>, <code>ButtonPressMask</code>, <code>ButtonReleaseMask</code>를 켠다. <code>MotionNotify</code>는 다음 중 하나 이상을 켠다.</p>
+<ul>
+<li><code>Button1MotionMask</code>~<code>Button5MotionMask</code>: 지정한 버튼 중 하나 이상이 눌린 동안만.</li>
+<li><code>ButtonMotionMask</code>: 아무 버튼이나 하나 이상 눌린 동안만(드래그).</li>
+<li><code>PointerMotionMask</code>: 버튼 상태와 상관없이 항상.</li>
+<li><code>PointerMotionHintMask</code>: 위 마스크와 함께 쓰면, 서버는 이벤트 창에 대해 <code>is_hint</code>가 <code>NotifyHint</code>인 <code>MotionNotify</code> 하나만 보내고, 키·버튼 상태가 바뀌거나 포인터가 창을 떠나거나 클라이언트가 <code>XQueryPointer</code>나 <code>XGetMotionEvents</code>를 부를 때까지 더 보내지 않아도 된다. 그래도 서버는 힌트가 아닌 일반 <code>MotionNotify</code>를 보낼 수도 있다.</li>
+</ul>
+<p>힌트 모드는 "움직였다는 사실만 알려 주고, 정확한 위치는 네가 물어봐"라는 방식이다. 처리가 느린 클라이언트에 이동 이벤트가 수백 개 쌓이는 것을 막는다.</p>
+<pre><code>/* PointerMotionHintMask 사용 예 */
+XSelectInput(dpy, win, ButtonMotionMask | PointerMotionHintMask | ButtonPressMask);
+...
+case MotionNotify:
+    if (ev.xmotion.is_hint == NotifyHint) {
+        Window r, c; int rx, ry, x, y; unsigned int m;
+        /* 현재 위치를 묻는 동시에 다음 힌트를 다시 받을 수 있게 됨 */
+        XQueryPointer(dpy, win, &amp;r, &amp;c, &amp;rx, &amp;ry, &amp;x, &amp;y, &amp;m);
+        draw_to(x, y);
+    } else {
+        draw_to(ev.xmotion.x, ev.xmotion.y);
+    }
+    break;</code></pre>
+
+<p>구조체는 다음과 같다. 셋은 거의 같고 마지막 "detail" 멤버만 다르다.</p>
+<pre><code>typedef struct {
+     int            type;            /* ButtonPress 또는 ButtonRelease */
+     unsigned long  serial;
+     Bool           send_event;
+     Display        *display;
+     Window         window;          /* 보고 기준이 되는 "이벤트" 창 */
+     Window         root;            /* 이벤트가 일어난 루트 창 */
+     Window         subwindow;       /* 자식 창 */
+     Time           time;            /* 밀리초 */
+     int            x, y;            /* 이벤트 창 기준 포인터 좌표 */
+     int            x_root, y_root;  /* 루트 기준 좌표 */
+     unsigned int   state;           /* 키·버튼 마스크 */
+     unsigned int   button;          /* detail */
+     Bool           same_screen;
+} XButtonEvent;
+typedef XButtonEvent XButtonPressedEvent;
+typedef XButtonEvent XButtonReleasedEvent;
+
+typedef struct {
+     int            type;            /* KeyPress 또는 KeyRelease */
+     ... /* serial ~ state 까지 XButtonEvent와 같음 */
+     unsigned int   keycode;         /* detail */
+     Bool           same_screen;
+} XKeyEvent;
+typedef XKeyEvent XKeyPressedEvent;
+typedef XKeyEvent XKeyReleasedEvent;
+
+typedef struct {
+     int            type;            /* MotionNotify */
+     ... /* serial ~ state 까지 같음 */
+     char           is_hint;         /* detail */
+     Bool           same_screen;
+} XMotionEvent;
+typedef XMotionEvent XPointerMovedEvent;</code></pre>
+<ul>
+<li><code>window</code>: 이벤트 창(위 전파 규칙으로 정해진 창).</li>
+<li><code>root</code>: 원천 창의 루트 창. <code>x_root</code>, <code>y_root</code>는 그 루트 기준 포인터 좌표.</li>
+<li><code>same_screen</code>: 이벤트 창이 루트 창과 같은 화면에 있으면 <code>True</code>. <code>False</code>면 <code>x</code>, <code>y</code>는 0이다.</li>
+<li><code>subwindow</code>: 원천 창이 이벤트 창의 자손이면 그 경로에 있는 이벤트 창의 자식, 아니면 <code>None</code>.</li>
+<li><code>time</code>: 이벤트가 생긴 서버 시각(밀리초). 더블클릭 판정이나 그랩·셀렉션 함수의 time 인자로 쓴다.</li>
+<li><code>state</code>: 이벤트 <b>직전</b>의 버튼·모디파이어 상태. <code>Button1Mask</code>~<code>Button5Mask</code>, <code>ShiftMask</code>, <code>LockMask</code>, <code>ControlMask</code>, <code>Mod1Mask</code>~<code>Mod5Mask</code>의 OR.</li>
+<li><code>keycode</code>: 물리 키를 나타내는 번호. 어느 글자인지는 키 매핑에 달려 있다(12.7절, 16.1절, 그리고 <code>XLookupString</code> 같은 함수로 변환).</li>
+<li><code>button</code>: 상태가 바뀐 버튼 <code>Button1</code>~<code>Button5</code>.</li>
+<li><code>is_hint</code>: <code>NotifyNormal</code> 또는 <code>NotifyHint</code>.</li>
+</ul>
+<div class="tip">함정: <code>state</code>는 "직전" 상태다. 그래서 <code>ButtonPress</code> 이벤트의 <code>state</code>에는 방금 누른 버튼이 들어 있지 않고, <code>ButtonRelease</code>의 <code>state</code>에는 방금 뗀 버튼이 아직 들어 있다. 또 <code>keycode</code>는 글자가 아니다. 'a' 키인지 알려면 keysym으로 변환해야 한다.</div>
+<p>고정값을 가진 기호들:</p>
+<table>
+<tr><th>기호</th><th>값</th><th>기호</th><th>값</th></tr>
+<tr><td><code>Button1MotionMask</code></td><td><code>(1L&lt;&lt;8)</code></td><td><code>ShiftMask</code></td><td><code>(1&lt;&lt;0)</code></td></tr>
+<tr><td><code>Button2MotionMask</code></td><td><code>(1L&lt;&lt;9)</code></td><td><code>LockMask</code></td><td><code>(1&lt;&lt;1)</code></td></tr>
+<tr><td><code>Button3MotionMask</code></td><td><code>(1L&lt;&lt;10)</code></td><td><code>ControlMask</code></td><td><code>(1&lt;&lt;2)</code></td></tr>
+<tr><td><code>Button4MotionMask</code></td><td><code>(1L&lt;&lt;11)</code></td><td><code>Mod1Mask</code></td><td><code>(1&lt;&lt;3)</code></td></tr>
+<tr><td><code>Button5MotionMask</code></td><td><code>(1L&lt;&lt;12)</code></td><td><code>Mod2Mask</code></td><td><code>(1&lt;&lt;4)</code></td></tr>
+<tr><td><code>Button1Mask</code></td><td><code>(1&lt;&lt;8)</code></td><td><code>Mod3Mask</code></td><td><code>(1&lt;&lt;5)</code></td></tr>
+<tr><td><code>Button2Mask</code></td><td><code>(1&lt;&lt;9)</code></td><td><code>Mod4Mask</code></td><td><code>(1&lt;&lt;6)</code></td></tr>
+<tr><td><code>Button3Mask</code></td><td><code>(1&lt;&lt;10)</code></td><td><code>Mod5Mask</code></td><td><code>(1&lt;&lt;7)</code></td></tr>
+<tr><td><code>Button4Mask</code></td><td><code>(1&lt;&lt;11)</code></td><td><code>Button1</code>~<code>Button5</code></td><td>1~5</td></tr>
+<tr><td><code>Button5Mask</code></td><td><code>(1&lt;&lt;12)</code></td><td></td><td></td></tr>
+</table>
+<p>주의할 점: <code>Button1MotionMask</code>(이벤트 마스크)와 <code>Button1Mask</code>(state 비트)는 값은 비슷해 보여도 쓰는 곳이 다르다. 앞의 것은 <code>XSelectInput</code>에, 뒤의 것은 <code>ev.xbutton.state</code>를 검사할 때 쓴다.</p>
+<pre><code>case ButtonPress:
+    if (ev.xbutton.button == Button1 &amp;&amp; (ev.xbutton.state &amp; ControlMask))
+        puts("Ctrl + 왼쪽 클릭");
+    break;
+case MotionNotify:
+    if (ev.xmotion.state &amp; Button1Mask)
+        puts("왼쪽 버튼 드래그 중");
+    break;</code></pre>
+
+<h3>10.6 창 진입/이탈 이벤트</h3>
+<p>포인터 이동이나 창 계층 변화(창이 매핑·이동되어 포인터 밑에 다른 창이 오는 경우) 때문에 포인터가 이전과 다른 창에 있게 되면, 서버는 <code>EnterNotify</code>/<code>LeaveNotify</code>를 등록한 클라이언트에게 보낸다. 계층 변화로 생긴 Enter/Leave는 그 변화가 만든 계층 이벤트(<code>UnmapNotify</code>, <code>MapNotify</code>, <code>ConfigureNotify</code>, <code>GravityNotify</code>, <code>CirculateNotify</code>)보다 뒤에 온다. 하지만 <code>FocusOut</code>, <code>VisibilityNotify</code>, <code>Expose</code>와의 순서는 정해져 있지 않다. <code>XGrabPointer</code>/<code>XUngrabPointer</code>를 부를 때도 생길 수 있다.</p>
+<p>받으려면 <code>EnterWindowMask</code>, <code>LeaveWindowMask</code>를 켠다.</p>
+<pre><code>typedef struct {
+     int           type;           /* EnterNotify 또는 LeaveNotify */
+     unsigned long serial;
+     Bool          send_event;
+     Display       *display;
+     Window        window;         /* 이벤트 창 */
+     Window        root;
+     Window        subwindow;
+     Time          time;
+     int           x, y;
+     int           x_root, y_root;
+     int           mode;           /* NotifyNormal, NotifyGrab, NotifyUngrab */
+     int           detail;         /* NotifyAncestor, NotifyVirtual, NotifyInferior,
+                                      NotifyNonlinear, NotifyNonlinearVirtual */
+     Bool          same_screen;
+     Bool          focus;          /* 이벤트 창이 포커스 창(또는 그 자손)인가 */
+     unsigned int  state;
+} XCrossingEvent;
+typedef XCrossingEvent XEnterWindowEvent;
+typedef XCrossingEvent XLeaveWindowEvent;</code></pre>
+<ul>
+<li><code>subwindow</code>: <code>LeaveNotify</code>면 처음 포인터 위치를 담은 자식, <code>EnterNotify</code>면 최종 포인터 위치를 담은 자식(없으면 <code>None</code>).</li>
+<li><code>x</code>, <code>y</code>: 항상 포인터의 <b>최종</b> 위치(이동 전 위치가 아님). 같은 화면이 아니면 0.</li>
+<li><code>focus</code>: 이벤트 창이 포커스 창이거나 그 자손이면 <code>True</code>.</li>
+<li><code>state</code>: 직전의 버튼·모디파이어 상태.</li>
+<li><code>mode</code>: 보통 이동이면 <code>NotifyNormal</code>, 그랩이 시작될 때의 가짜 이동이면 <code>NotifyGrab</code>, 그랩이 끝날 때면 <code>NotifyUngrab</code>.</li>
+<li><code>detail</code>: 창 계층에서 어떤 관계로 이동했는지.</li>
+</ul>
+
+<h4>보통(Normal) 진입/이탈</h4>
+<p>포인터가 창 A에서 창 B로 갈 때, 서버는 A와 B 사이의 모든 창에 이벤트를 만든다. "중간에 지나간" 창이 <code>NotifyVirtual</code> 계열을 받는다. 그래서 중첩된 창 각각이 "내 영역 안에 포인터가 있다"는 상태를 정확히 추적할 수 있다.</p>
+<table>
+<tr><th>상황</th><th>A(떠난 창)</th><th>사이의 창들(양 끝 제외)</th><th>B(들어간 창)</th></tr>
+<tr><td>A가 B의 자손(안에서 바깥으로)</td><td><code>LeaveNotify</code>, <code>NotifyAncestor</code></td><td><code>LeaveNotify</code>, <code>NotifyVirtual</code></td><td><code>EnterNotify</code>, <code>NotifyInferior</code></td></tr>
+<tr><td>B가 A의 자손(바깥에서 안으로)</td><td><code>LeaveNotify</code>, <code>NotifyInferior</code></td><td><code>EnterNotify</code>, <code>NotifyVirtual</code></td><td><code>EnterNotify</code>, <code>NotifyAncestor</code></td></tr>
+<tr><td>공통 조상 C를 사이에 둔 형제·사촌 관계</td><td><code>LeaveNotify</code>, <code>NotifyNonlinear</code></td><td>A~C 사이: <code>LeaveNotify</code>, C~B 사이: <code>EnterNotify</code>, 모두 <code>NotifyNonlinearVirtual</code></td><td><code>EnterNotify</code>, <code>NotifyNonlinear</code></td></tr>
+<tr><td>다른 화면</td><td><code>LeaveNotify</code>, <code>NotifyNonlinear</code></td><td>A 위로 루트까지(루트 포함) <code>LeaveNotify</code>; B의 루트부터 B 직전까지 <code>EnterNotify</code>; 모두 <code>NotifyNonlinearVirtual</code></td><td><code>EnterNotify</code>, <code>NotifyNonlinear</code></td></tr>
+</table>
+<p>detail 이름은 "상대 창이 나에게 무엇인가"로 읽으면 쉽다. A가 B의 자손일 때 A가 받는 Leave의 detail이 <code>NotifyAncestor</code>인 것은 "조상 쪽으로 나갔다"는 뜻이다. B가 받는 Enter가 <code>NotifyInferior</code>인 것은 "자손 쪽에서 들어왔다"는 뜻이다.</p>
+<div class="tip">자주 하는 실수: 부모 창의 버튼을 하이라이트할 때 Leave를 받으면 무조건 하이라이트를 끈다. 그런데 포인터가 자식 창으로 들어가도 부모는 <code>LeaveNotify</code>(detail=<code>NotifyInferior</code>)를 받는다. 포인터는 여전히 부모 영역 안이다. "정말 나갔는지"를 보려면 <code>detail != NotifyInferior</code>를 확인한다.</div>
+
+<h4>그랩/언그랩 진입/이탈</h4>
+<p>포인터 그랩이 시작되거나 끝날 때 "가짜 이동" Enter/Leave가 생긴다. 그랩 창을 G, 포인터가 있는 창을 P라 하자.</p>
+<ul>
+<li>그랩 시작(confine_to 창으로의 초기 워프 뒤, 그랩을 일으킨 실제 <code>ButtonPress</code>를 만들기 전): 포인터가 P에서 G의 어딘가로 순간 이동한 것처럼 위 규칙대로 이벤트를 만들고 <code>mode</code>를 <code>NotifyGrab</code>으로 한다. 실제로는 포인터가 움직이지 않으므로 처음·나중 위치 모두 현재 위치다.</li>
+<li>그랩 끝(그랩을 끝낸 실제 <code>ButtonRelease</code>를 만든 뒤): G에서 P로 순간 이동한 것처럼 만들고 <code>mode</code>를 <code>NotifyUngrab</code>으로 한다.</li>
+</ul>
+<p>그랩 중에는 다른 창이 이벤트를 받지 못하므로, 이 가짜 이벤트로 "이제 포인터가 너에게 없다고 생각해라"를 알려 주는 것이다.</p>
+
+<h3>10.7 입력 포커스 이벤트</h3>
+<p>키보드는 언제나 어떤 창(보통 루트 창이나 최상위 창)에 붙어 있다. 이것을 포커스 창이라 한다. 키 입력이 어느 창으로 갈지는 포커스 창과 포인터 위치가 함께 정한다. 포커스가 바뀐 것을 알면 텍스트 커서를 깜빡이거나 테두리를 강조하는 등 화면 표시를 바꿀 수 있다. <code>FocusChangeMask</code>를 켜면 <code>FocusIn</code>/<code>FocusOut</code>을 받는다.</p>
+<pre><code>typedef struct {
+     int           type;       /* FocusIn 또는 FocusOut */
+     unsigned long serial;
+     Bool          send_event;
+     Display       *display;
+     Window        window;     /* 이벤트가 생긴 창 */
+     int           mode;       /* NotifyNormal, NotifyWhileGrabbed, NotifyGrab, NotifyUngrab */
+     int           detail;     /* NotifyAncestor, NotifyVirtual, NotifyInferior,
+                                  NotifyNonlinear, NotifyNonlinearVirtual, NotifyPointer,
+                                  NotifyPointerRoot, NotifyDetailNone */
+} XFocusChangeEvent;
+typedef XFocusChangeEvent XFocusInEvent;
+typedef XFocusChangeEvent XFocusOutEvent;</code></pre>
+<p><code>mode</code>는 보통 포커스 변화(<code>NotifyNormal</code>), 그랩 중의 포커스 변화(<code>NotifyWhileGrabbed</code>), 키보드 그랩 시작(<code>NotifyGrab</code>), 끝(<code>NotifyUngrab</code>) 중 하나다. 창 언매핑으로 생긴 <code>FocusOut</code>은 <code>UnmapNotify</code> 뒤에 오지만, Enter/Leave/Visibility/Expose와의 순서는 정해져 있지 않다.</p>
+
+<h4>보통 포커스 이벤트와 그랩 중 포커스 이벤트</h4>
+<p>규칙은 Enter/Leave와 같은 모양(A·B와 그 사이 창에 Ancestor/Virtual/Inferior/Nonlinear/NonlinearVirtual)이다. 다른 점은 포인터 위치 P가 끼어든다는 것이다. 포커스가 창 B에 있고 포인터가 B 안쪽 자손 P에 있으면, 키 입력은 사실상 P 쪽으로 간다(포커스 창 안에서는 포인터 밑 창이 키를 받는다). 그래서 B부터 P까지의 창에 detail이 <code>NotifyPointer</code>인 이벤트가 추가로 생긴다.</p>
+<table>
+<tr><th>포커스 이동</th><th>생기는 이벤트(순서대로)</th></tr>
+<tr><td>A → B, A가 B의 자손</td><td>A: Out/<code>NotifyAncestor</code>; 사이: Out/<code>NotifyVirtual</code>; B: In/<code>NotifyInferior</code>; P가 B의 자손이면서 A나 A의 자손·조상이 아니면 B 아래~P(포함): In/<code>NotifyPointer</code></td></tr>
+<tr><td>A → B, B가 A의 자손</td><td>P가 A의 자손이면서 B의 자손·조상이 아니면 P~A 직전: Out/<code>NotifyPointer</code>; A: Out/<code>NotifyInferior</code>; 사이: In/<code>NotifyVirtual</code>; B: In/<code>NotifyAncestor</code></td></tr>
+<tr><td>A → B, 공통 조상 C</td><td>P가 A의 자손이면 P~A 직전: Out/<code>NotifyPointer</code>; A: Out/<code>NotifyNonlinear</code>; A~C 사이: Out/<code>NotifyNonlinearVirtual</code>; C~B 사이: In/<code>NotifyNonlinearVirtual</code>; B: In/<code>NotifyNonlinear</code>; P가 B의 자손이면 B 아래~P: In/<code>NotifyPointer</code></td></tr>
+<tr><td>A → B, 다른 화면</td><td>위와 같되, 사이 창 대신 A 위로 루트까지(포함) Out/<code>NotifyNonlinearVirtual</code>, B의 루트부터 B 직전까지 In/<code>NotifyNonlinearVirtual</code></td></tr>
+<tr><td>A → <code>PointerRoot</code> 또는 <code>None</code></td><td>P가 A의 자손이면 P~A 직전: Out/<code>NotifyPointer</code>; A: Out/<code>NotifyNonlinear</code>; A 위로 루트까지: Out/<code>NotifyNonlinearVirtual</code>; 모든 화면의 루트: In/<code>NotifyPointerRoot</code>(또는 <code>NotifyDetailNone</code>); 새 포커스가 <code>PointerRoot</code>면 P의 루트~P(포함): In/<code>NotifyPointer</code></td></tr>
+<tr><td><code>PointerRoot</code> 또는 <code>None</code> → A</td><td>옛 포커스가 <code>PointerRoot</code>면 P~P의 루트(포함): Out/<code>NotifyPointer</code>; 모든 루트: Out/<code>NotifyPointerRoot</code>(또는 <code>NotifyDetailNone</code>); A가 루트가 아니면 A의 루트~A 직전: In/<code>NotifyNonlinearVirtual</code>; A: In/<code>NotifyNonlinear</code>; P가 A의 자손이면 A 아래~P: In/<code>NotifyPointer</code></td></tr>
+<tr><td><code>PointerRoot</code> ↔ <code>None</code></td><td>옛 포커스가 <code>PointerRoot</code>면 P~P의 루트: Out/<code>NotifyPointer</code>; 모든 루트: Out/(<code>NotifyPointerRoot</code> 또는 <code>NotifyDetailNone</code>); 모든 루트: In/(<code>NotifyDetailNone</code> 또는 <code>NotifyPointerRoot</code>); 새 포커스가 <code>PointerRoot</code>면 P의 루트~P: In/<code>NotifyPointer</code></td></tr>
+</table>
+<p><code>PointerRoot</code>는 "포인터 밑의 창으로 키를 보내라", <code>None</code>은 "키 입력을 버려라"라는 특수 포커스 값이다.</p>
+<div class="tip">실용적으로는 대부분의 앱이 detail을 세세히 볼 필요가 없다. 최상위 창이 포커스를 얻었는지만 알고 싶다면 <code>NotifyPointer</code>와 <code>NotifyVirtual</code>/<code>NotifyNonlinearVirtual</code>(지나가는 창이 받는 것)를 무시하고, 나머지 <code>FocusIn</code>/<code>FocusOut</code>만으로 상태를 바꾸면 된다.</div>
+
+<h4>그랩이 만드는 포커스 이벤트</h4>
+<p>키보드 그랩(<code>XGrabKeyboard</code>)이 시작될 때(그랩을 일으킨 실제 <code>KeyPress</code>를 만들기 전), 그랩 창을 G, 현재 포커스를 F라 하면 포커스가 F에서 G로 바뀐 것처럼 <code>FocusIn</code>/<code>FocusOut</code>을 <code>mode</code>=<code>NotifyGrab</code>으로 만든다. 그랩이 끝날 때(그랩을 끝낸 실제 <code>KeyRelease</code>를 만든 뒤)는 G에서 F로 바뀐 것처럼 <code>mode</code>=<code>NotifyUngrab</code>으로 만든다.</p>
+
+<h3>10.8 키맵 상태 알림 이벤트</h3>
+<p><code>KeymapStateMask</code>를 켜면, 서버는 <code>EnterNotify</code>와 <code>FocusIn</code> 바로 뒤에 매번 <code>KeymapNotify</code>를 보낸다. 창이 포커스를 얻은 순간 "지금 어떤 키가 이미 눌려 있는지"를 알려 주는 것이다. 예를 들어 Shift를 누른 채 창에 들어오면 그 창은 Shift의 <code>KeyPress</code>를 받은 적이 없는데, 이 이벤트로 상태를 맞출 수 있다.</p>
+<pre><code>typedef struct {
+     int            type;           /* KeymapNotify */
+     unsigned long  serial;
+     Bool           send_event;
+     Display        *display;
+     Window         window;         /* 쓰이지 않음(툴킷 편의용) */
+     char           key_vector[32];
+} XKeymapEvent;</code></pre>
+<p><code>key_vector</code>는 32바이트(256비트) 비트 벡터다. 바이트 N(0부터)은 키코드 8N~8N+7을 담고, 바이트의 최하위 비트가 키 8N이다. 비트가 1이면 그 키가 눌려 있다.</p>
+<pre><code>int key_down(const XKeymapEvent *e, unsigned int keycode) {
+    return (e-&gt;key_vector[keycode / 8] &gt;&gt; (keycode % 8)) &amp; 1;
+}</code></pre>
+
+<h3>10.9 노출(Exposure) 이벤트</h3>
+<p>X 프로토콜은 창이 가려지거나 재배치될 때 창 내용을 보존해 준다고 약속하지 않는다. 어떤 구현은 보존하고(backing store 등), 어떤 구현은 가려진 부분을 그냥 버린다. 그래서 X는 <b>창 내용을 다시 그리는 책임을 클라이언트에게</b> 맡긴다. 가려졌던 부분이 다시 보이게 되면(노출되면) 서버가 <code>Expose</code> 이벤트로 "이 창의 이 사각형이 비었으니 다시 그려라"라고 알려 준다. 단순한 앱은 창 전체를 다시 그리고, 신경 쓴 앱은 노출된 영역만 다시 그린다.</p>
+<p>왜 이렇게 설계했을까? 화면 밖에 모든 창의 픽셀을 저장하려면 메모리가 많이 든다. X가 처음 나온 시절에는 이것이 큰 부담이었고, 원격 클라이언트가 그림 명령을 다시 보내는 편이 더 쌌다.</p>
+
+<h4>Expose 이벤트</h4>
+<p><code>Expose</code>가 생기는 조건은 다른 이벤트만큼 명확하지 않다. 그래도 <code>InputOnly</code> 창에는 절대 생기지 않는다. 창의 어떤 영역에 유효한 내용이 없고, 그 영역이 보이거나, 보일 수 있는 상태에서 서버가 (새로) backing store를 유지하거나, 창이 보이지 않지만 서버가 backing-store 속성 <code>Always</code>/<code>WhenMapped</code>를 (새로) 지키게 될 때 생길 수 있다. 영역은 임의의 사각형 집합으로 나뉘고, 사각형마다 <code>Expose</code> 하나가 생긴다. 창을 올리는 것 같은 한 동작이 만든 노출 영역은 연속해서(중간에 다른 것 없이) 보고된다.</p>
+<p><code>ExposureMask</code>를 켜면 받는다.</p>
+<pre><code>typedef struct {
+     int           type;           /* Expose */
+     unsigned long serial;
+     Bool          send_event;
+     Display       *display;
+     Window        window;         /* 노출된(손상된) 창 */
+     int           x, y;           /* 사각형 왼쪽 위(창 기준) */
+     int           width, height;  /* 사각형 크기 */
+     int           count;          /* 0이 아니면 적어도 이만큼 더 온다 */
+} XExposeEvent;</code></pre>
+<p><code>count</code>가 핵심이다. 0이면 이 창에 대한 이번 묶음의 마지막 <code>Expose</code>다. 0이 아니면 적어도 그만큼(더 많을 수도 있음) 더 온다. 영역을 구분하지 않는 단순한 앱은 <code>count</code>가 0이 아닌 이벤트는 무시하고 0일 때만 전체를 다시 그리면 된다.</p>
+<pre><code>case Expose:
+    if (ev.xexpose.count != 0) break;   /* 묶음의 마지막만 처리 */
+    XClearWindow(dpy, win);
+    XDrawString(dpy, win, gc, 20, 30, "hello", 5);
+    break;</code></pre>
+<div class="tip">함정: 창을 매핑(<code>XMapWindow</code>)하자마자 그림을 그리면 아무것도 안 보일 수 있다. 창이 실제로 화면에 나타나기 전에 그린 것은 버려지기 때문이다. 그리기는 반드시 첫 <code>Expose</code>를 받은 뒤에, 그리고 매 <code>Expose</code>마다 한다.</div>
+
+<h4>GraphicsExpose와 NoExpose 이벤트</h4>
+<p><code>XCopyArea</code>나 <code>XCopyPlane</code>으로 복사할 때, 원본 영역이 가려져 있거나 범위를 벗어나 대상의 일부를 계산할 수 없으면 서버가 <code>GraphicsExpose</code>를 보낸다. "그 부분은 복사 못 했으니 네가 그려라"라는 뜻이다. 한 그래픽 요청이 만든 영역은 연속해서 보고된다. 복사가 모두 성공해서 <code>GraphicsExpose</code>가 하나도 없으면 대신 <code>NoExpose</code> 하나를 보낸다. 그래서 스크롤처럼 복사 결과를 기다려야 하는 코드는 <code>GraphicsExpose</code>(count=0) 또는 <code>NoExpose</code> 중 하나가 올 때까지 기다리면 된다.</p>
+<p>받으려면 GC의 graphics-exposures 속성이 <code>True</code>여야 한다(<code>XCreateGC</code> 때 지정하거나 <code>XSetGraphicsExposures</code>로). 이것은 마스크가 아니라 GC 속성으로 제어된다는 점이 다른 이벤트와 다르다.</p>
+<pre><code>typedef struct {
+     int            type;           /* GraphicsExpose */
+     unsigned long  serial;
+     Bool           send_event;
+     Display        *display;
+     Drawable       drawable;
+     int            x, y;
+     int            width, height;
+     int            count;          /* 0이 아니면 적어도 이만큼 더 온다 */
+     int            major_code;     /* 코어에서는 CopyArea 또는 CopyPlane */
+     int            minor_code;     /* 코어에서는 정의 안 됨 */
+} XGraphicsExposeEvent;
+
+typedef struct {
+     int           type;         /* NoExpose */
+     unsigned long serial;
+     Bool          send_event;
+     Display       *display;
+     Drawable      drawable;
+     int           major_code;
+     int           minor_code;
+} XNoExposeEvent;</code></pre>
+<ul>
+<li><code>drawable</code>: 복사의 대상 drawable. 창이 아니라 픽스맵일 수도 있어서 <code>window</code>가 아니라 <code>drawable</code>이다.</li>
+<li><code>major_code</code>: <code>X_CopyArea</code> 또는 <code>X_CopyPlane</code>(<code>&lt;X11/Xproto.h&gt;</code>). 어느 함수가 원인인지 알려 준다.</li>
+<li><code>minor_code</code>: 코어 프로토콜에서는 0. 확장이 쓸 수 있다.</li>
+<li><code>x</code>, <code>y</code>, <code>width</code>, <code>height</code>, <code>count</code>: <code>Expose</code>와 같은 뜻(좌표는 drawable 기준).</li>
+</ul>
+<div class="tip">스크롤에 <code>XCopyArea</code>를 쓰지 않는 앱이라면 GC의 graphics-exposures를 <code>False</code>로 꺼 두는 것이 좋다. 안 그러면 픽스맵→창 복사를 할 때마다 <code>NoExpose</code>가 큐에 쌓인다.</div>
+
+<h3>10.10 창 상태 변화 이벤트</h3>
+<p>이 이벤트들은 창에 "이미 일어난" 변화를 알려 준다. 대부분 두 가지 방법으로 받는다. 그 창 자신에 <code>StructureNotifyMask</code>를 걸거나, 부모 창에 <code>SubstructureNotifyMask</code>를 걸어 모든 자식의 변화를 받는다. 그래서 구조체에 창이 두 개 있다. <code>event</code>는 이벤트를 받은 창(자기 자신 또는 부모)이고, <code>window</code>는 실제로 변한 창이다. 공용체 공통 부분의 다섯 번째 멤버는 <code>event</code>다(툴킷이 "받은 창" 기준으로 처리를 찾게 하려는 배치).</p>
+
+<h4>CirculateNotify</h4>
+<p><code>XCirculateSubwindows</code>, <code>XCirculateSubwindowsUp</code>, <code>XCirculateSubwindowsDown</code> 때문에 창이 실제로 쌓임 순서(stacking order)를 바꿨을 때 생긴다.</p>
+<pre><code>typedef struct {
+     int type;               /* CirculateNotify */
+     unsigned long serial;
+     Bool send_event;
+     Display *display;
+     Window event;
+     Window window;
+     int place;              /* PlaceOnTop, PlaceOnBottom */
+} XCirculateEvent;</code></pre>
+<p><code>place</code>는 바뀐 뒤의 위치다. <code>PlaceOnTop</code>이면 형제 중 맨 위, <code>PlaceOnBottom</code>이면 맨 아래.</p>
+
+<h4>ConfigureNotify</h4>
+<p>창의 크기·위치·테두리·쌓임 순서가 실제로 바뀌었을 때 생긴다. 원인이 되는 함수: <code>XConfigureWindow</code>, <code>XLowerWindow</code>, <code>XRaiseWindow</code>, <code>XRestackWindows</code>, <code>XMoveWindow</code>, <code>XResizeWindow</code>, <code>XMoveResizeWindow</code>, <code>XMapRaised</code>, <code>XSetWindowBorderWidth</code>. 일반 앱이 가장 자주 쓰는 구조 이벤트다. 사용자가 창 크기를 바꾸면 이 이벤트로 새 크기를 알게 된다.</p>
+<pre><code>typedef struct {
+     int           type;       /* ConfigureNotify */
+     unsigned long serial;
+     Bool          send_event;
+     Display       *display;
+     Window        event;
+     Window        window;
+     int           x, y;
+     int           width, height;
+     int           border_width;
+     Window        above;
+     Bool          override_redirect;
+} XConfigureEvent;</code></pre>
+<ul>
+<li><code>x</code>, <code>y</code>: <b>부모</b> 창 기준, 테두리 바깥 왼쪽 위 모서리.</li>
+<li><code>width</code>, <code>height</code>: 테두리를 뺀 안쪽 크기.</li>
+<li><code>border_width</code>: 테두리 폭(픽셀).</li>
+<li><code>above</code>: 바로 아래 형제. <code>None</code>이면 이 창이 형제 중 맨 아래, 형제 창이면 이 창은 그 형제 바로 위에 있다.</li>
+<li><code>override_redirect</code>: 창의 override-redirect 속성. 창 관리자는 이것이 <code>True</code>인 창(팝업 메뉴 등)을 보통 무시해야 한다.</li>
+</ul>
+<pre><code>XSelectInput(dpy, win, ExposureMask | StructureNotifyMask | KeyPressMask);
+...
+case ConfigureNotify:
+    if (ev.xconfigure.width != cur_w || ev.xconfigure.height != cur_h) {
+        cur_w = ev.xconfigure.width;
+        cur_h = ev.xconfigure.height;
+        relayout();          /* 다시 그리기는 뒤따르는 Expose에서 */
+    }
+    break;</code></pre>
+<div class="tip">함정: 창 관리자가 최상위 창을 자기 프레임 창 안으로 리페어런트(reparent)하는 경우가 많다. 그러면 <code>ConfigureNotify</code>의 <code>x</code>, <code>y</code>는 루트가 아닌 프레임 기준이라 화면 위치로 쓸 수 없다. 화면 좌표가 필요하면 <code>XTranslateCoordinates</code>로 변환한다. 다만 <code>send_event</code>가 <code>True</code>인 합성 <code>ConfigureNotify</code>(창 관리자가 ICCCM 규약에 따라 보내는 것)에는 루트 기준 좌표가 들어 있다.</div>
+
+<h4>CreateNotify</h4>
+<p><code>XCreateWindow</code>나 <code>XCreateSimpleWindow</code>로 창이 만들어지면 생긴다. 부모 창에 <code>SubstructureNotifyMask</code>를 걸어야만 받는다.</p>
+<pre><code>typedef struct {
+     int           type;               /* CreateNotify */
+     unsigned long serial;
+     Bool          send_event;
+     Display       *display;
+     Window        parent;             /* 만들어진 창의 부모 */
+     Window        window;             /* 만들어진 창 */
+     int           x, y;               /* 부모 기준 바깥 왼쪽 위 */
+     int           width, height;      /* 안쪽 크기, 항상 0이 아님 */
+     int           border_width;
+     Bool          override_redirect;
+} XCreateWindowEvent;</code></pre>
+
+<h4>DestroyNotify</h4>
+<p><code>XDestroyWindow</code>나 <code>XDestroySubwindows</code>로 창이 없어지면 생긴다. 어떤 창이든 그 자손들의 <code>DestroyNotify</code>가 그 창 자신보다 먼저 생긴다(안쪽부터 바깥으로). 형제끼리나 다른 하위 트리 사이의 순서는 정해져 있지 않다.</p>
+<pre><code>typedef struct {
+     int           type;       /* DestroyNotify */
+     unsigned long serial;
+     Bool          send_event;
+     Display       *display;
+     Window        event;
+     Window        window;     /* 없어진 창 */
+} XDestroyWindowEvent;</code></pre>
+<div class="tip">이 이벤트를 받았을 때 <code>window</code>는 이미 없다. 그 ID로 Xlib 함수를 부르면 <code>BadWindow</code> 오류가 난다. 자기 자료 구조에서 지우는 데만 쓴다.</div>
+
+<h4>GravityNotify</h4>
+<p>부모의 크기가 바뀌어(<code>XConfigureWindow</code>, <code>XMoveResizeWindow</code>, <code>XResizeWindow</code>) 자식 창이 win_gravity에 따라 실제로 움직였을 때 생긴다.</p>
+<pre><code>typedef struct {
+     int           type;       /* GravityNotify */
+     unsigned long serial;
+     Bool          send_event;
+     Display       *display;
+     Window        event;
+     Window        window;     /* 움직인 자식 창 */
+     int           x, y;       /* 부모 기준 새 바깥 왼쪽 위 */
+} XGravityEvent;</code></pre>
+
+<h4>MapNotify</h4>
+<p>창이 매핑 안 됨 → 매핑됨으로 바뀌면 생긴다. 원인: <code>XMapWindow</code>, <code>XMapRaised</code>, <code>XMapSubwindows</code>, <code>XReparentWindow</code>, 또는 save-set 처리.</p>
+<pre><code>typedef struct {
+     int           type;                  /* MapNotify */
+     unsigned long serial;
+     Bool          send_event;
+     Display       *display;
+     Window        event;
+     Window        window;
+     Bool          override_redirect;
+} XMapEvent;</code></pre>
+<p>창 관리자는 <code>override_redirect</code>가 <code>True</code>면 보통 무시한다. 이런 이벤트는 대개 구조 제어를 우회하는 팝업에서 생기기 때문이다.</p>
+<div class="tip">"매핑됨"과 "보임"은 다르다. <code>MapNotify</code>는 매핑 요청이 끝났다는 뜻일 뿐, 그 창이 화면에 보인다는 보장은 아니다(부모가 언매핑 상태일 수 있다). 그리기 시점은 <code>Expose</code>로 판단한다.</div>
+
+<h4>MappingNotify</h4>
+<p>키보드·포인터 매핑이 바뀌면 <b>모든 클라이언트</b>에게 간다. 원하지 않는다고 표시하는 방법이 없다. 원인: <code>XSetModifierMapping</code>(어떤 키코드를 모디파이어로 쓸지), <code>XChangeKeyboardMapping</code>(키보드 매핑), <code>XSetPointerMapping</code>(버튼 매핑)이 성공했을 때.</p>
+<pre><code>typedef struct {
+     int           type;           /* MappingNotify */
+     unsigned long serial;
+     Bool          send_event;
+     Display       *display;
+     Window        window;         /* 쓰이지 않음 */
+     int           request;        /* MappingModifier, MappingKeyboard, MappingPointer */
+     int           first_keycode;  /* 바뀐 첫 키코드 */
+     int           count;          /* 바뀐 키코드 개수 */
+} XMappingEvent;</code></pre>
+<p><code>first_keycode</code>와 <code>count</code>는 <code>request</code>가 <code>MappingKeyboard</code>일 때만 의미가 있다. 클라이언트가 가진 키보드 정보를 갱신하려면 <code>XRefreshKeyboardMapping</code>을 부른다.</p>
+<pre><code>case MappingNotify:
+    XRefreshKeyboardMapping(&amp;ev.xmapping);   /* 키 변환 캐시 갱신 */
+    break;</code></pre>
+<div class="tip">이 처리를 빼먹으면 사용자가 키 배치를 바꾼 뒤에도 앱은 옛 배치로 글자를 해석한다. 이벤트 루프에 이 세 줄은 거의 항상 넣는다.</div>
+
+<h4>ReparentNotify</h4>
+<p><code>XReparentWindow</code>로 창의 부모가 실제로 바뀌면 생긴다. 창 자신에 <code>StructureNotifyMask</code>, 또는 옛 부모나 새 부모에 <code>SubstructureNotifyMask</code>를 걸어 받는다.</p>
+<pre><code>typedef struct {
+     int           type;       /* ReparentNotify */
+     unsigned long serial;
+     Bool          send_event;
+     Display       *display;
+     Window        event;
+     Window        window;     /* 부모가 바뀐 창 */
+     Window        parent;     /* 새 부모 */
+     int           x, y;       /* 새 부모 기준 바깥 왼쪽 위 */
+     Bool          override_redirect;
+} XReparentEvent;</code></pre>
+<p>일반 앱은 창 관리자가 자기 최상위 창을 프레임에 넣을 때 이 이벤트를 받는다.</p>
+
+<h4>UnmapNotify</h4>
+<p>창이 매핑됨 → 매핑 안 됨으로 바뀌면 생긴다.</p>
+<pre><code>typedef struct {
+     int           type;       /* UnmapNotify */
+     unsigned long serial;
+     Bool          send_event;
+     Display       *display;
+     Window        event;
+     Window        window;     /* 언매핑된 창 */
+     Bool          from_configure;
+} XUnmapEvent;</code></pre>
+<p><code>from_configure</code>는 창의 win_gravity가 <code>UnmapGravity</code>여서 부모 크기 변경 때문에 언매핑되었으면 <code>True</code>다.</p>
+
+<h4>VisibilityNotify</h4>
+<p>창이 얼마나 보이는지가 바뀌면 생긴다. "보인다"는 화면을 보는 사람이 실제로 볼 수 있다는 뜻이다. <code>InputOnly</code> 창에는 생기지 않는다. 계층 변화로 생긴 것은 그 계층 이벤트(Unmap/Map/Configure/Gravity/Circulate) 뒤에 오고, 한 창에 대해서는 <code>Expose</code>보다 먼저 온다(모든 창의 Visibility가 모든 창의 Expose보다 먼저라는 보장은 없다). <code>FocusOut</code>, Enter/Leave와의 순서는 정해져 있지 않다. <code>VisibilityChangeMask</code>로 받는다.</p>
+<pre><code>typedef struct {
+     int           type;       /* VisibilityNotify */
+     unsigned long serial;
+     Bool          send_event;
+     Display       *display;
+     Window        window;
+     int           state;      /* VisibilityUnobscured, VisibilityPartiallyObscured,
+                                  VisibilityFullyObscured */
+} XVisibilityEvent;</code></pre>
+<p>판단할 때 그 창의 자식 창들은 무시한다(자기 자식에 가려진 것은 가려진 것으로 치지 않는다).</p>
+<ul>
+<li>부분/완전히 가려짐 또는 보이지 않음 → 보이고 전혀 안 가려짐: <code>VisibilityUnobscured</code></li>
+<li>전혀 안 가려짐 또는 보이지 않음 → 보이고 부분적으로 가려짐: <code>VisibilityPartiallyObscured</code></li>
+<li>전혀 안 가려짐, 부분적으로 가려짐 또는 보이지 않음 → 보이지만 완전히 가려짐: <code>VisibilityFullyObscured</code></li>
+</ul>
+<p>쓸모: 애니메이션이나 게임에서 창이 완전히 가려졌으면(<code>VisibilityFullyObscured</code>) 그리기를 멈춰 CPU를 아낀다.</p>
+
+<h3>10.11 구조 제어 이벤트</h3>
+<p>이 이벤트들은 창 관리자(window manager)를 위한 것이다. 부모 창(보통 루트 창)에 <code>SubstructureRedirectMask</code>를 걸면, 다른 클라이언트가 그 자식 창을 매핑·이동·크기 변경·재배치하려 할 때 <b>서버가 그 요청을 실행하지 않고</b> 대신 요청 내용을 이벤트로 보내 준다. 창 관리자는 그것을 보고 원하는 대로(프레임을 씌우고 위치를 정하는 등) 처리한다. 이 마스크는 한 창에 한 클라이언트만 걸 수 있다. 그래서 한 화면에 창 관리자는 하나만 돌 수 있다. override-redirect 속성이 <code>True</code>인 창(팝업 메뉴, 툴팁)은 가로채이지 않는다.</p>
+
+<h4>CirculateRequest</h4>
+<p>다른 클라이언트가 <code>XCirculateSubwindows</code>, <code>XCirculateSubwindowsUp</code>, <code>XCirculateSubwindowsDown</code>을 불러 자식이 실제로 재배치되어야 할 때 생긴다. 예를 들어 어떤 앱이 <code>XCirculateSubwindowsUp</code>으로 자식을 맨 위로 올리려 해도, <code>SubstructureRedirectMask</code>를 건 클라이언트에게 <code>CirculateRequest</code>가 가고 실제로는 올라가지 않는다.</p>
+<pre><code>typedef struct {
+     int           type;       /* CirculateRequest */
+     unsigned long serial;
+     Bool          send_event;
+     Display       *display;
+     Window        parent;
+     Window        window;     /* 재배치될 자식 */
+     int place;                /* PlaceOnTop, PlaceOnBottom: 원하는 새 위치 */
+} XCirculateRequestEvent;</code></pre>
+
+<h4>ConfigureRequest</h4>
+<p>다른 클라이언트가 자식 창에 <code>ConfigureWindow</code> 프로토콜 요청을 보내면 생긴다. 원인 함수: <code>XConfigureWindow</code>, <code>XLowerWindow</code>, <code>XRaiseWindow</code>, <code>XMapRaised</code>, <code>XMoveResizeWindow</code>, <code>XMoveWindow</code>, <code>XResizeWindow</code>, <code>XRestackWindows</code>, <code>XSetWindowBorderWidth</code>. 창의 override-redirect가 <code>False</code>면 서버는 요청을 실행하지 않고 이 이벤트만 보낸다.</p>
+<pre><code>typedef struct {
+     int           type;         /* ConfigureRequest */
+     unsigned long serial;
+     Bool          send_event;
+     Display       *display;
+     Window        parent;
+     Window        window;
+     int           x, y;
+     int           width, height;
+     int           border_width;
+     Window        above;
+     int           detail;       /* Above, Below, TopIf, BottomIf, Opposite */
+     unsigned long value_mask;
+} XConfigureRequestEvent;</code></pre>
+<p><code>value_mask</code>는 요청에 어떤 항목이 들어 있었는지(<code>CWX</code>, <code>CWWidth</code> 등)를 알려 준다. 들어 있던 값은 요청 그대로, 나머지는 창의 현재 값으로 채워진다. 단 <code>above</code>(형제)와 <code>detail</code>(stack-mode)은 요청에 없으면 각각 <code>None</code>, <code>Above</code>로 보고된다.</p>
+
+<h4>MapRequest</h4>
+<p>다른 클라이언트가 override-redirect가 <code>False</code>인 언매핑 창에 <code>XMapWindow</code>, <code>XMapRaised</code>, <code>XMapSubwindows</code>를 부르면 생긴다. 창은 매핑되지 않고 이 이벤트만 간다. 창 관리자는 이것으로 새 창의 배치를 통제한다.</p>
+<pre><code>typedef struct {
+     int           type;       /* MapRequest */
+     unsigned long serial;
+     Bool          send_event;
+     Display       *display;
+     Window        parent;
+     Window        window;     /* 매핑하려는 창 */
+} XMapRequestEvent;</code></pre>
+<p>아주 작은 창 관리자의 핵심 부분은 이런 모양이다.</p>
+<pre><code>XSelectInput(dpy, DefaultRootWindow(dpy),
+             SubstructureRedirectMask | SubstructureNotifyMask);
+for (;;) {
+    XEvent ev;
+    XNextEvent(dpy, &amp;ev);
+    if (ev.type == MapRequest) {
+        /* 원하면 여기서 위치를 정하거나 프레임에 넣는다 */
+        XMapWindow(dpy, ev.xmaprequest.window);   /* 대신 매핑해 준다 */
+    } else if (ev.type == ConfigureRequest) {
+        XConfigureRequestEvent *r = &amp;ev.xconfigurerequest;
+        XWindowChanges wc;
+        wc.x = r-&gt;x; wc.y = r-&gt;y;
+        wc.width = r-&gt;width; wc.height = r-&gt;height;
+        wc.border_width = r-&gt;border_width;
+        wc.sibling = r-&gt;above; wc.stack_mode = r-&gt;detail;
+        XConfigureWindow(dpy, r-&gt;window, (unsigned int)r-&gt;value_mask, &amp;wc);
+    }
+}</code></pre>
+<div class="tip">가로챈 클라이언트(창 관리자) 자신이 부르는 <code>XMapWindow</code>/<code>XConfigureWindow</code>는 다시 가로채이지 않는다(원문 표현으로 "다른 클라이언트가" 요청할 때만 Request 이벤트가 생긴다). 그래서 위처럼 받은 요청을 대신 실행할 수 있다. 다른 창 관리자가 이미 돌고 있으면 <code>XSelectInput</code>이 <code>BadAccess</code> 오류를 낸다.</div>
+
+<h4>ResizeRequest</h4>
+<p>다른 클라이언트가 <code>XConfigureWindow</code>, <code>XResizeWindow</code>, <code>XMoveResizeWindow</code>로 그 창의 크기를 바꾸려 하면 생긴다. 그 창에 <code>ResizeRedirectMask</code>를 걸어 받으며, 크기 변경 시도는 가로채인다.</p>
+<pre><code>typedef struct {
+     int           type;        /* ResizeRequest */
+     unsigned long serial;
+     Bool          send_event;
+     Display       *display;
+     Window        window;
+     int           width, height;   /* 요청된 안쪽 크기(테두리 제외) */
+} XResizeRequestEvent;</code></pre>
+
+<h3>10.12 컬러맵 상태 변화 이벤트</h3>
+<p>창의 컬러맵이 바뀌거나 컬러맵이 설치/해제되면 <code>ColormapNotify</code>가 생긴다. 원인: <code>XChangeWindowAttributes</code>/<code>XSetWindowColormap</code>으로 창의 colormap 속성을 바꾸거나 <code>XFreeColormap</code>으로 컬러맵을 해제할 때, 그리고 <code>XInstallColormap</code>/<code>XUninstallColormap</code>. <code>ColormapChangeMask</code>로 받는다. 요즘의 트루컬러 화면에서는 거의 쓰이지 않는다.</p>
+<pre><code>typedef struct {
+     int           type;       /* ColormapNotify */
+     unsigned long serial;
+     Bool          send_event;
+     Display       *display;
+     Window        window;
+     Colormap      colormap;   /* 컬러맵 또는 None */
+     Bool          new;
+     int           state;      /* ColormapInstalled, ColormapUninstalled */
+} XColormapEvent;</code></pre>
+<ul>
+<li><code>colormap</code>: 창에 연결된 컬러맵. <code>XFreeColormap</code>으로 해제된 경우 <code>None</code>.</li>
+<li><code>new</code>: <code>True</code>면 창의 컬러맵이 바뀐 것, <code>False</code>면 설치/해제된 것.</li>
+<li><code>state</code>: 지금 설치되어 있는지(<code>ColormapInstalled</code>/<code>ColormapUninstalled</code>). 항상 채워진다.</li>
+</ul>
+<div class="tip">C++ 컴파일러로 빌드하면 멤버 이름 <code>new</code>가 예약어와 충돌한다. 그래서 Xlib 헤더는 C++에서 이 멤버를 <code>c_new</code>로 바꿔 선언한다.</div>
+
+<h3>10.13 클라이언트 간 통신 이벤트</h3>
+<h4>ClientMessage</h4>
+<p>서버가 스스로 만드는 일은 없다. 어떤 클라이언트가 <code>XSendEvent</code>를 부를 때만 생긴다. 내용은 서버가 해석하지 않고 그대로 전달하므로, 프로그램끼리 자유롭게 짧은 메시지를 주고받는 데 쓴다. 대표적인 예가 창 관리자가 보내는 <code>WM_PROTOCOLS</code>/<code>WM_DELETE_WINDOW</code>("닫기 버튼이 눌렸다") 메시지다.</p>
+<pre><code>typedef struct {
+     int           type;           /* ClientMessage */
+     unsigned long serial;
+     Bool          send_event;
+     Display       *display;
+     Window        window;
+     Atom          message_type;
+     int           format;
+     union {
+         char  b[20];
+         short s[10];
+         long  l[5];
+     } data;
+} XClientMessageEvent;</code></pre>
+<ul>
+<li><code>message_type</code>: 데이터를 어떻게 해석할지 나타내는 아톰(받는 쪽과 약속한 이름).</li>
+<li><code>format</code>: 8, 16, 32. 데이터를 바이트(<code>b[20]</code>), short(<code>s[10]</code>), long(<code>l[5]</code>)의 목록으로 볼지 정한다. 메시지 종류에 따라 일부만 쓸 수 있다.</li>
+<li>서버는 <code>window</code>, <code>message_type</code>, <code>data</code>를 전혀 해석하지 않는다.</li>
+</ul>
+<pre><code>/* 창 닫기 버튼 처리 */
+Atom wm_protocols = XInternAtom(dpy, "WM_PROTOCOLS", False);
+Atom wm_delete    = XInternAtom(dpy, "WM_DELETE_WINDOW", False);
+XSetWMProtocols(dpy, win, &amp;wm_delete, 1);
+...
+case ClientMessage:
+    if (ev.xclient.message_type == wm_protocols &amp;&amp;
+        (Atom)ev.xclient.data.l[0] == wm_delete)
+        running = 0;
+    break;</code></pre>
+<div class="tip">format 32라도 <code>data.l</code>은 C의 <code>long</code>이다. 64비트 시스템에서 <code>long</code>은 8바이트지만 전송되는 값은 32비트씩 5개다. 그래서 항상 <code>l[0]</code>~<code>l[4]</code>로 읽고 쓰며, 다른 타입 배열로 memcpy하지 않는다.</div>
+
+<h4>PropertyNotify</h4>
+<p>창의 프로퍼티가 바뀌면 생긴다. <code>PropertyChangeMask</code>로 받는다.</p>
+<pre><code>typedef struct {
+     int           type;       /* PropertyNotify */
+     unsigned long serial;
+     Bool          send_event;
+     Display       *display;
+     Window        window;
+     Atom atom;                /* 바뀐 프로퍼티 */
+     Time time;                /* 바뀐 서버 시각 */
+     int state;                /* PropertyNewValue 또는 PropertyDelete */
+} XPropertyEvent;</code></pre>
+<p><code>state</code>가 <code>PropertyNewValue</code>가 되는 경우: <code>XChangeProperty</code>나 <code>XRotateWindowProperties</code>로 값을 바꿨을 때(길이 0 데이터를 덧붙여도, 같은 값으로 덮어써도 생긴다). <code>PropertyDelete</code>가 되는 경우: <code>XDeleteProperty</code>로 지웠거나, delete 인자를 <code>True</code>로 준 <code>XGetWindowProperty</code>로 읽었을 때.</p>
+<div class="tip">요령: 셀렉션 함수 등에 넣을 "현재 서버 시각"이 필요하면, 자기 창에 길이 0 데이터를 <code>PropModeAppend</code>로 <code>XChangeProperty</code>하고 돌아오는 <code>PropertyNotify</code>의 <code>time</code>을 쓴다. 위 규칙(길이 0이어도 이벤트가 생김) 덕분에 가능한 방법이다.</div>
+
+<h4>SelectionClear</h4>
+<p>셀렉션(복사·붙여넣기의 바탕 구조)의 소유권을 잃는 클라이언트에게 간다. 다른 클라이언트가 <code>XSetSelectionOwner</code>로 소유권을 가져갈 때 생긴다. 받으면 선택 표시(하이라이트)를 지우면 된다.</p>
+<pre><code>typedef struct {
+     int           type;       /* SelectionClear */
+     unsigned long serial;
+     Bool          send_event;
+     Display       *display;
+     Window        window;     /* 잃는 쪽이 XSetSelectionOwner에 줬던 창 */
+     Atom          selection;  /* 셀렉션 아톰 */
+     Time          time;       /* 셀렉션의 마지막 변경 시각 */
+} XSelectionClearEvent;</code></pre>
+
+<h4>SelectionRequest</h4>
+<p>셀렉션 소유자에게 간다. 다른 클라이언트가 그 셀렉션에 대해 <code>XConvertSelection</code>을 부르면(즉 붙여넣기를 하면) 생긴다.</p>
+<pre><code>typedef struct {
+     int           type;       /* SelectionRequest */
+     unsigned long serial;
+     Bool          send_event;
+     Display       *display;
+     Window        owner;      /* 소유자가 XSetSelectionOwner에 줬던 창 */
+     Window        requestor;  /* 요청한 창 */
+     Atom          selection;  /* 예: PRIMARY */
+     Atom          target;     /* 원하는 데이터 형식 */
+     Atom          property;   /* 결과를 넣을 프로퍼티 또는 None */
+     Time          time;       /* ConvertSelection 요청의 시각 또는 CurrentTime */
+} XSelectionRequestEvent;</code></pre>
+<p>소유자는 <code>target</code> 형식으로 데이터를 변환해 요청자 창의 프로퍼티에 넣고, <code>SelectionNotify</code> 이벤트를 요청자에게 보내야 한다. 셀렉션 사용법의 완전한 규칙은 X 컨소시엄 표준 ICCCM(Inter-Client Communication Conventions Manual)에 있다.</p>
+
+<h4>SelectionNotify</h4>
+<p>셀렉션에 소유자가 없으면 <code>ConvertSelection</code> 요청에 대한 응답으로 서버가 직접 만든다. 소유자가 있으면 소유자가 <code>XSendEvent</code>로 만들어 보내야 한다. 변환해서 프로퍼티에 저장했을 때, 또는 변환할 수 없을 때(<code>property</code>를 <code>None</code>으로) 보낸다. 요청에서 property가 <code>None</code>이었다면 소유자가 프로퍼티 이름을 골라 요청자 창에 저장하고 그 실제 이름을 담아 보낸다.</p>
+<pre><code>typedef struct {
+     int           type;       /* SelectionNotify */
+     unsigned long serial;
+     Bool          send_event;
+     Display       *display;
+     Window        requestor;
+     Atom          selection;  /* 예: PRIMARY */
+     Atom          target;     /* 변환된 형식, 예: PIXMAP */
+     Atom          property;   /* 결과가 저장된 프로퍼티, 실패하면 None */
+     Time          time;       /* 변환 시각 또는 CurrentTime */
+} XSelectionEvent;</code></pre>
+<p>소유자 쪽에서 요청에 응답하는 예(11.6절의 <code>XSendEvent</code> 참고):</p>
+<pre><code>case SelectionRequest: {
+    XSelectionRequestEvent *rq = &amp;ev.xselectionrequest;
+    XEvent reply;
+    memset(&amp;reply, 0, sizeof reply);
+    reply.xselection.type      = SelectionNotify;
+    reply.xselection.requestor = rq-&gt;requestor;
+    reply.xselection.selection = rq-&gt;selection;
+    reply.xselection.target    = rq-&gt;target;
+    reply.xselection.time      = rq-&gt;time;
+    if (rq-&gt;target == XA_STRING &amp;&amp; rq-&gt;property != None) {
+        XChangeProperty(dpy, rq-&gt;requestor, rq-&gt;property, XA_STRING, 8,
+                        PropModeReplace, (unsigned char *)text, strlen(text));
+        reply.xselection.property = rq-&gt;property;
+    } else {
+        reply.xselection.property = None;        /* 변환 실패 */
+    }
+    XSendEvent(dpy, rq-&gt;requestor, False, 0, &amp;reply);
+    break;
+}</code></pre>
+<p>(<code>XA_STRING</code>은 <code>&lt;X11/Xatom.h&gt;</code>에 있다. 실제 프로그램은 <code>TARGETS</code>, <code>UTF8_STRING</code> 등도 처리해야 한다.)</p>
+</section><div class="pager"><a href="ch9.html">← 9장. 윈도 매니저·세션 매니저 함수 (Window and Session Manager Functions)</a><a href="./">차례</a><a href="ch11.html">11장. 이벤트 처리 함수 (Event Handling Functions) →</a></div>
+<a class="top" href="#">↑ 위로</a>
+</html>

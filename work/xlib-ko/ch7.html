@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>7장. 그래픽 컨텍스트 함수 (Graphics Context Functions) — Xlib 한국어</title>
+<style>
+body{font:16px/1.75 system-ui,"Malgun Gothic",sans-serif;max-width:860px;margin:40px auto;padding:0 16px;background:#111;color:#e8e8e8}
+a{color:#7cf} h1{line-height:1.3} h2{margin-top:3em;border-bottom:1px solid #444;padding-bottom:.3em} h2 small{color:#999;font-weight:normal;font-size:.6em}
+h3{margin-top:2em;color:#fd8} h4{color:#9df}
+code{font-family:ui-monospace,Consolas,monospace;font-size:.92em;background:#222;padding:1px 4px;border-radius:3px}
+pre{background:#1b1d22;border:1px solid #333;padding:12px;overflow-x:auto;border-radius:6px;line-height:1.45} pre code{background:none;padding:0}
+.tip{background:#1d2a1d;border-left:4px solid #6c6;padding:8px 12px;margin:1em 0;border-radius:4px}
+table{border-collapse:collapse;margin:1em 0;font-size:.92em;display:block;overflow-x:auto} td,th{border:1px solid #444;padding:4px 8px;vertical-align:top} th{background:#222}
+nav ol{columns:2} .top{position:fixed;right:16px;bottom:16px;background:#333;padding:6px 10px;border-radius:6px;text-decoration:none}
+.pager{display:flex;justify-content:space-between;gap:12px;margin:2em 0;padding-top:1em;border-top:1px solid #444} .pager a{text-decoration:none}
+</style>
+<p><a href="../../">← 조이봉방</a> · <a href="./">Xlib 번역 차례</a></p><div class="pager"><a href="ch6.html">← 6장. 색 관리 함수 (Color Management Functions)</a><a href="./">차례</a><a href="ch8.html">8장. 그래픽 함수 (Graphics Functions) →</a></div><section id="ch7"><h2 style="margin-top:1em">7장. 그래픽 컨텍스트 함수 <small>(Graphics Context Functions)</small></h2>
+
+<p>X에서 무언가를 그리려면 여러 설정이 필요하다. 전경색, 배경색, 선 두께, 선 모양, 채우기 방식, 클리핑 영역 등이다. 이것을 그리기 함수마다 인자로 다 넘기면 너무 길고, 매번 네트워크로 보내면 느리다. 그래서 X는 이런 설정을 <b>그래픽 컨텍스트(GC)</b>라는 서버 자원에 모아 두고, 그리기 요청에는 GC ID만 넘긴다. 8장의 그리기 함수 대부분이 GC를 인자로 받는 이유다.</p>
+<p>이론상 X 프로토콜은 앱끼리 GC를 공유하는 것을 허용하지만, 앱은 각자 자기 GC를 쓰는 것이 원칙이다. 라이브러리가 GC 상태를 캐시하기 때문에 공유는 강하게 말린다.</p>
+<p>그리기는 윈도나 픽스맵(합쳐서 드로어블)에 할 수 있다. 드로어블은 한 화면에 속한다. GC는 <b>특정 화면과 특정 깊이</b>를 위해 만들어지고, 화면과 깊이가 같은 드로어블에만 쓸 수 있다.</p>
+
+<h3>7.1 GC와 그 상태 다루기 (Manipulating Graphics Context/State)</h3>
+<p>그리기 속성 대부분이 GC에 있다. 선 두께, 선 스타일, 플레인 마스크, 전경, 배경, 타일, 스티플, 클리핑 영역, 끝 모양, 이음 모양 등이다. 그리기 요청(예: 선 긋기)은 이 값들로 실제 동작을 정한다. 확장(extension)이 GC에 구성 요소를 더할 수도 있다. GC 내용은 Xlib 내부 것이라 직접 들여다보면 안 된다.</p>
+
+<h4>왜 GC를 공유하면 안 되나: write-back 캐시</h4>
+<p>Xlib는 GC 중 자원 ID가 아닌 요소들에 대해 <b>write-back 캐시</b>를 둔다. 값을 바꿔도 바로 서버에 보내지 않고 기억만 해 두었다가, 실제로 그 GC로 그릴 때 바뀐 것을 한꺼번에 보낸다. 예를 들어 <code>XSetForeground</code>를 부르고 이어서 <code>XSetLineAttributes</code>를 불러도 서버로는 GC 변경 요청이 한 번만 간다. 이 덕분에 편의 함수를 여러 번 불러도 비용이 적다.</p>
+<p>대신 다른 앱이 같은 GC를 바꾸면 내 Xlib의 캐시와 서버 상태가 어긋난다. 외부 동기화 없이는 공유할 수 없으므로, GC 공유는 하지 않는다.</p>
+
+<h4>XGCValues와 값 마스크</h4>
+<p>GC 속성을 정하려면 <code>XGCValues</code> 구조체의 해당 멤버를 채우고, 그 멤버에 대응하는 마스크 비트를 OR해서 <code>XCreateGC</code> 등에 넘긴다. 마스크에 없는 멤버는 무시되므로 구조체 전체를 채울 필요가 없다.</p>
+<pre><code>/* GC 속성 마스크 비트 */
+#define GCFunction          (1L&lt;&lt;0)
+#define GCPlaneMask         (1L&lt;&lt;1)
+#define GCForeground        (1L&lt;&lt;2)
+#define GCBackground        (1L&lt;&lt;3)
+#define GCLineWidth         (1L&lt;&lt;4)
+#define GCLineStyle         (1L&lt;&lt;5)
+#define GCCapStyle          (1L&lt;&lt;6)
+#define GCJoinStyle         (1L&lt;&lt;7)
+#define GCFillStyle         (1L&lt;&lt;8)
+#define GCFillRule          (1L&lt;&lt;9)
+#define GCTile              (1L&lt;&lt;10)
+#define GCStipple           (1L&lt;&lt;11)
+#define GCTileStipXOrigin   (1L&lt;&lt;12)
+#define GCTileStipYOrigin   (1L&lt;&lt;13)
+#define GCFont              (1L&lt;&lt;14)
+#define GCSubwindowMode     (1L&lt;&lt;15)
+#define GCGraphicsExposures (1L&lt;&lt;16)
+#define GCClipXOrigin       (1L&lt;&lt;17)
+#define GCClipYOrigin       (1L&lt;&lt;18)
+#define GCClipMask          (1L&lt;&lt;19)
+#define GCDashOffset        (1L&lt;&lt;20)
+#define GCDashList          (1L&lt;&lt;21)
+#define GCArcMode           (1L&lt;&lt;22)
+
+typedef struct {
+    int function;             /* 논리 연산 */
+    unsigned long plane_mask; /* 플레인 마스크 */
+    unsigned long foreground; /* 전경 픽셀 */
+    unsigned long background; /* 배경 픽셀 */
+    int line_width;           /* 선 두께(픽셀) */
+    int line_style;           /* LineSolid, LineOnOffDash, LineDoubleDash */
+    int cap_style;            /* CapNotLast, CapButt, CapRound, CapProjecting */
+    int join_style;           /* JoinMiter, JoinRound, JoinBevel */
+    int fill_style;           /* FillSolid, FillTiled, FillStippled, FillOpaqueStippled */
+    int fill_rule;            /* EvenOddRule, WindingRule */
+    int arc_mode;             /* ArcChord, ArcPieSlice */
+    Pixmap tile;              /* 타일링용 픽스맵 */
+    Pixmap stipple;           /* 스티플용 1플레인 픽스맵 */
+    int ts_x_origin;          /* 타일/스티플 원점 */
+    int ts_y_origin;
+    Font font;                /* 텍스트 기본 폰트 */
+    int subwindow_mode;       /* ClipByChildren, IncludeInferiors */
+    Bool graphics_exposures;  /* exposure 이벤트를 만들지 */
+    int clip_x_origin;        /* 클리핑 원점 */
+    int clip_y_origin;
+    Pixmap clip_mask;         /* 비트맵 클리핑 */
+    int dash_offset;          /* 점선 정보 */
+    char dashes;
+} XGCValues;</code></pre>
+
+<h4>기본값</h4>
+<table>
+<tr><th>구성 요소</th><th>기본값</th></tr>
+<tr><td>function</td><td><code>GXcopy</code></td></tr>
+<tr><td>plane_mask</td><td>모두 1</td></tr>
+<tr><td>foreground</td><td>0</td></tr>
+<tr><td>background</td><td>1</td></tr>
+<tr><td>line_width</td><td>0</td></tr>
+<tr><td>line_style</td><td><code>LineSolid</code></td></tr>
+<tr><td>cap_style</td><td><code>CapButt</code></td></tr>
+<tr><td>join_style</td><td><code>JoinMiter</code></td></tr>
+<tr><td>fill_style</td><td><code>FillSolid</code></td></tr>
+<tr><td>fill_rule</td><td><code>EvenOddRule</code></td></tr>
+<tr><td>arc_mode</td><td><code>ArcPieSlice</code></td></tr>
+<tr><td>tile</td><td>크기가 정해지지 않은, 전경 픽셀(클라이언트가 지정했으면 그 값, 아니면 0)로 채운 픽스맵. 나중에 전경을 바꿔도 이 픽스맵은 바뀌지 않는다.</td></tr>
+<tr><td>stipple</td><td>크기가 정해지지 않은, 1로 채운 픽스맵</td></tr>
+<tr><td>ts_x_origin, ts_y_origin</td><td>0, 0</td></tr>
+<tr><td>font</td><td>구현마다 다름</td></tr>
+<tr><td>subwindow_mode</td><td><code>ClipByChildren</code></td></tr>
+<tr><td>graphics_exposures</td><td><code>True</code></td></tr>
+<tr><td>clip_x_origin, clip_y_origin</td><td>0, 0</td></tr>
+<tr><td>clip_mask</td><td><code>None</code></td></tr>
+<tr><td>dash_offset</td><td>0</td></tr>
+<tr><td>dashes</td><td>4 (즉 [4, 4] 목록)</td></tr>
+</table>
+<div class="tip">전경 0, 배경 1이라는 기본값은 윈도에 쓸 만한 색이 아니다. 픽셀 값 0이 검정이라는 보장도 없다. GC를 만들면 반드시 <code>BlackPixel</code>/<code>WhitePixel</code>이나 할당한 색으로 전경·배경을 직접 정한다. 기본 폰트도 구현마다 다르므로 글자를 그릴 거라면 폰트를 지정한다.</div>
+
+<h4>function: 픽셀을 어떻게 합칠까</h4>
+<p>GC의 <code>function</code>은 드로어블의 한 영역(목적지, dst)을 다른 곳의 비트(원본, src)로 갱신할 때, 새 목적지 비트를 원본 비트와 옛 목적지 비트로 어떻게 계산할지 정한다. 컬러 디스플레이에서도 제대로 동작하는 <code>GXcopy</code>가 보통 가장 쓸모 있다. 특수한 앱은 다른 함수를 특정 플레인과 함께 쓰기도 한다. 16가지 함수는 <code>&lt;X11/X.h&gt;</code>에 있다.</p>
+<table>
+<tr><th>이름</th><th>값</th><th>연산</th></tr>
+<tr><td><code>GXclear</code></td><td>0x0</td><td>0</td></tr>
+<tr><td><code>GXand</code></td><td>0x1</td><td>src AND dst</td></tr>
+<tr><td><code>GXandReverse</code></td><td>0x2</td><td>src AND NOT dst</td></tr>
+<tr><td><code>GXcopy</code></td><td>0x3</td><td>src</td></tr>
+<tr><td><code>GXandInverted</code></td><td>0x4</td><td>(NOT src) AND dst</td></tr>
+<tr><td><code>GXnoop</code></td><td>0x5</td><td>dst</td></tr>
+<tr><td><code>GXxor</code></td><td>0x6</td><td>src XOR dst</td></tr>
+<tr><td><code>GXor</code></td><td>0x7</td><td>src OR dst</td></tr>
+<tr><td><code>GXnor</code></td><td>0x8</td><td>(NOT src) AND (NOT dst)</td></tr>
+<tr><td><code>GXequiv</code></td><td>0x9</td><td>(NOT src) XOR dst</td></tr>
+<tr><td><code>GXinvert</code></td><td>0xa</td><td>NOT dst</td></tr>
+<tr><td><code>GXorReverse</code></td><td>0xb</td><td>src OR (NOT dst)</td></tr>
+<tr><td><code>GXcopyInverted</code></td><td>0xc</td><td>NOT src</td></tr>
+<tr><td><code>GXorInverted</code></td><td>0xd</td><td>(NOT src) OR dst</td></tr>
+<tr><td><code>GXnand</code></td><td>0xe</td><td>(NOT src) OR (NOT dst)</td></tr>
+<tr><td><code>GXset</code></td><td>0xf</td><td>1</td></tr>
+</table>
+
+<h4>plane_mask</h4>
+<p>많은 그리기 연산이 GC의 픽셀 값이나 플레인에 따라 달라진다. <code>plane_mask</code>는 <code>long</code> 타입이고, 목적지의 어느 플레인(비트)을 바꿀지를 플레인당 한 비트로 나타낸다. 흑백 디스플레이는 플레인이 하나뿐이고 그것이 가장 낮은 비트다. 플레인이 늘어나면 더 높은 비트를 차지한다.</p>
+<p>원본·목적지 픽셀이 주어지면 결과는 대응하는 비트끼리 계산된다. 즉 비트 플레인마다 불 연산을 한다. <code>plane_mask</code>는 연산을 일부 플레인으로 제한한다. 모든 플레인을 가리키는 매크로 <code>AllPlanes</code>가 있다. 최종 결과는 다음과 같다.</p>
+<pre><code>((src FUNC dst) AND plane-mask) OR (dst AND (NOT plane-mask))</code></pre>
+<p>즉 마스크가 1인 비트는 연산 결과로, 0인 비트는 원래 값 그대로 남는다. foreground, background, plane_mask 값은 범위를 검사하지 않고 필요한 비트 수만큼 잘라 쓴다.</p>
+<div class="tip"><b>XOR 그리기의 고전 기법.</b> <code>GXxor</code>로 같은 도형을 두 번 그리면 원래 화면으로 돌아온다. 마우스로 고무줄 사각형(rubber band)을 그릴 때 화면 내용을 저장하지 않고 지웠다 그렸다 할 수 있는 이유다. 다만 트루컬러 화면에서는 XOR 결과 색이 예측하기 어려우므로, 전경을 <code>BlackPixel ^ WhitePixel</code>로 정하는 식의 요령을 쓴다.</div>
+
+<h4>선 두께: 굵은 선과 얇은 선</h4>
+<p><code>line_width</code>는 픽셀 단위다. 1 이상이면 굵은 선(wide line), 0이라는 특별한 값이면 얇은 선(thin line)이다.</p>
+<p><b>굵은 선</b>은 요청이 지정한 경로를 중심으로 그려진다. join/cap 스타일을 빼고 보면, 끝점이 [x1, y1], [x2, y2]이고 두께가 w인 굵은 선의 경계 상자는 다음 네 실수 좌표를 꼭짓점으로 하는 사각형이다(sn은 선 각도의 사인, cs는 코사인).</p>
+<pre><code>[x1-(w*sn/2), y1+(w*cs/2)], [x1+(w*sn/2), y1-(w*cs/2)],
+[x2-(w*sn/2), y2+(w*cs/2)], [x2+(w*sn/2), y2-(w*cs/2)]</code></pre>
+<p>픽셀의 중심이 이 상자 안에 완전히 들어가면 그 픽셀이 그려진다(상자 경계는 두께가 없다고 본다). 중심이 정확히 경계 위에 있으면 안쪽이 바로 오른쪽(x 증가 방향)에 있을 때만 그려진다. 중심이 가로 경계 위에 있는 픽셀은 특수한 경우로, 안쪽이나 경계가 바로 아래(y 증가 방향)에 있고 동시에 안쪽이나 경계가 바로 오른쪽에 있을 때만 그려진다. 이런 규칙 덕분에 맞닿은 도형이 픽셀을 중복으로 칠하거나 빈틈을 남기지 않는다.</p>
+<p><b>얇은 선</b>(두께 0)은 정해지지 않은 장치 의존 알고리즘으로 그리는 1픽셀 선이다. 제약은 두 가지뿐이다.</p>
+<ul>
+<li>[x1,y1]–[x2,y2] 선과 이를 (dx, dy)만큼 옮긴 선을 클리핑 없이 그리면, 첫 선이 [x,y]를 칠하는 것과 둘째 선이 [x+dx,y+dy]를 칠하는 것이 정확히 대응한다(평행 이동해도 모양이 같다).</li>
+<li>클리핑이 선의 점 집합을 바꾸지 않는다. 즉 클리핑된 선은 "클리핑 영역 안에 있고, 클리핑 없이 그렸어도 칠해졌을 점"만 칠한다.</li>
+</ul>
+<p>굵은 선은 [x1,y1]→[x2,y2]로 그리든 반대로 그리든(cap/join 스타일 제외) 같은 픽셀을 칠한다. 얇은 선도 그러기를 권장하지만 필수는 아니다. 두께 0과 두께 1은 칠하는 픽셀이 다를 수 있다. 이렇게 느슨한 이유는 제조사의 선 그리기 하드웨어를 쓸 수 있게 하려는 것이고, 그 하드웨어는 정밀하게 정의된 굵은 선보다 몇 배 빠를 수 있다.</p>
+<div class="tip">보통은 얇은 선이 두께 1 굵은 선보다 빠르다. 하지만 알고리즘이 달라 굵은 선과 섞으면 보기 좋지 않을 수 있다. 모든 디스플레이에서 정확하고 똑같은 결과가 필요하면 0 대신 두께 1을 쓴다.</div>
+
+<h4>line_style, cap_style, join_style</h4>
+<p><b>line_style</b>은 선의 어느 부분을 그릴지 정한다.</p>
+<ul>
+<li><code>LineSolid</code>: 경로 전체를 그린다.</li>
+<li><code>LineDoubleDash</code>: 경로 전체를 그리되, 짝수 대시와 홀수 대시를 다르게 채운다(fill_style 참고). 짝수·홀수 대시가 만나는 곳은 <code>CapButt</code> 모양이다.</li>
+<li><code>LineOnOffDash</code>: 짝수 대시만 그린다. 각 대시의 내부 끝에도 cap_style이 적용되는데, <code>CapNotLast</code>는 <code>CapButt</code>로 취급한다.</li>
+</ul>
+<p><b>cap_style</b>은 경로의 끝점 모양이다.</p>
+<ul>
+<li><code>CapNotLast</code>: <code>CapButt</code>와 같지만, 두께 0이면 마지막 끝점을 그리지 않는다. 여러 선을 이어 그릴 때 이음점이 두 번 칠해지는 것(특히 XOR에서 문제)을 막는다.</li>
+<li><code>CapButt</code>: 끝이 선에 수직으로 잘리고 튀어나오지 않는다.</li>
+<li><code>CapRound</code>: 끝점을 중심으로 지름이 선 두께인 반원이 붙는다(두께 0이면 <code>CapButt</code>와 같다).</li>
+<li><code>CapProjecting</code>: 끝은 네모지만, 끝점 너머로 두께의 절반만큼 더 나간다(두께 0이면 <code>CapButt</code>와 같다).</li>
+</ul>
+<p><b>join_style</b>은 굵은 선의 모서리 모양이다.</p>
+<ul>
+<li><code>JoinMiter</code>: 두 선의 바깥 모서리를 연장해 뾰족하게 만난다. 단, 각도가 11도보다 작으면 너무 길게 뾰족해지므로 <code>JoinBevel</code>을 대신 쓴다.</li>
+<li><code>JoinRound</code>: 이음점을 중심으로 지름이 선 두께인 원호로 둥글게.</li>
+<li><code>JoinBevel</code>: 양쪽 끝을 <code>CapButt</code>로 자르고 사이의 삼각형 홈을 채운다.</li>
+</ul>
+<p>끝점이 같은 선(x1=x2, y1=y2)에 cap 스타일이 양 끝에 적용되면 결과는 두께와 스타일에 따라 다르다.</p>
+<table>
+<tr><th>cap_style</th><th>두께</th><th>결과</th></tr>
+<tr><td><code>CapNotLast</code></td><td>얇음</td><td>장치 의존. 바라는 효과는 아무것도 안 그리는 것</td></tr>
+<tr><td><code>CapButt</code></td><td>얇음</td><td>장치 의존. 바라는 효과는 픽셀 하나</td></tr>
+<tr><td><code>CapRound</code></td><td>얇음</td><td><code>CapButt</code>/얇음과 같음</td></tr>
+<tr><td><code>CapProjecting</code></td><td>얇음</td><td><code>CapButt</code>/얇음과 같음</td></tr>
+<tr><td><code>CapButt</code></td><td>굵음</td><td>아무것도 안 그림</td></tr>
+<tr><td><code>CapRound</code></td><td>굵음</td><td>끝점 중심, 지름이 두께인 원</td></tr>
+<tr><td><code>CapProjecting</code></td><td>굵음</td><td>끝점 중심, 변이 두께인 축 정렬 정사각형</td></tr>
+</table>
+<p>끝점이 같은 선에 join 스타일이 적용되면, 그 선은 전체 경로에서 없는 것처럼 취급된다. 단, 전체 경로가 한 점뿐이거나 한 점으로 줄어들면 양 끝에 cap 스타일을 적용한 것과 같다.</p>
+<div class="tip"><code>CapRound</code>와 두께가 있는 선으로 "같은 점에서 같은 점으로" 선을 그으면 둥근 점이 찍힌다. 그림판의 붓 찍기를 간단히 만드는 요령이다.</div>
+
+<h4>타일과 스티플</h4>
+<p>타일·스티플은 무한한 2차원 평면에 무늬가 사방으로 반복된 것이라고 생각하면 된다. 이 평면을 드로어블 위에 겹칠 때, 무늬 하나의 왼쪽 위 모서리가 타일/스티플 원점(ts_x_origin, ts_y_origin)에 오도록 맞춘다. 타일/스티플 원점과 클립 원점은 그리기 요청의 <b>목적지 드로어블 원점 기준</b>이다.</p>
+<ul>
+<li>타일 픽스맵은 GC와 루트·깊이가 같아야 한다(아니면 <code>BadMatch</code>).</li>
+<li>스티플 픽스맵은 깊이 1이고 GC와 루트가 같아야 한다(아니면 <code>BadMatch</code>).</li>
+<li>fill_style이 <code>FillStippled</code>일 때(<code>FillOpaqueStippled</code>가 아닐 때) 스티플은 한 플레인에서 반복되어 clip-mask와 AND되는 추가 클립 마스크처럼 작동한다.</li>
+<li>더 빠른 크기가 있을 수는 있지만, 어떤 크기의 픽스맵이든 타일·스티플로 쓸 수 있다.</li>
+</ul>
+
+<h4>fill_style</h4>
+<p>fill_style은 선, 텍스트, 채우기 요청의 "원본"이 무엇인지 정한다. 모든 텍스트·채우기 요청(<code>XDrawText</code>, <code>XDrawText16</code>, <code>XFillRectangle</code>, <code>XFillPolygon</code>, <code>XFillArc</code> 등), <code>LineSolid</code> 선 요청(<code>XDrawLine</code>, <code>XDrawSegments</code>, <code>XDrawRectangle</code>, <code>XDrawArc</code> 등), 그리고 <code>LineOnOffDash</code>/<code>LineDoubleDash</code>의 짝수 대시에는 다음이 적용된다.</p>
+<table>
+<tr><th>fill_style</th><th>원본</th></tr>
+<tr><td><code>FillSolid</code></td><td>전경색</td></tr>
+<tr><td><code>FillTiled</code></td><td>타일</td></tr>
+<tr><td><code>FillOpaqueStippled</code></td><td>스티플과 같은 크기의 타일로, 스티플이 0인 곳은 배경색, 1인 곳은 전경색</td></tr>
+<tr><td><code>FillStippled</code></td><td>스티플로 가린 전경색(1인 곳만 칠함)</td></tr>
+</table>
+<p><code>LineDoubleDash</code>의 홀수 대시는 다음과 같다.</p>
+<table>
+<tr><th>fill_style</th><th>홀수 대시의 원본</th></tr>
+<tr><td><code>FillSolid</code></td><td>배경색</td></tr>
+<tr><td><code>FillTiled</code></td><td>짝수 대시와 같음</td></tr>
+<tr><td><code>FillOpaqueStippled</code></td><td>짝수 대시와 같음</td></tr>
+<tr><td><code>FillStippled</code></td><td>스티플로 가린 배경색</td></tr>
+</table>
+<div class="tip">GC에 픽스맵을 넣을 때 서버가 복사본을 만들 수도, 안 만들 수도 있다. 그래서 나중에 그 픽스맵에 그리면 GC에 반영될 수도, 안 될 수도 있다. 무늬를 바꾸려면 픽스맵에 그린 뒤 <code>XSetTile</code>/<code>XSetStipple</code>을 다시 부르는 것이 안전하다. 또 같은 픽스맵을 한 요청에서 목적지이자 타일/스티플로 동시에 쓰면 결과가 정해져 있지 않다.</div>
+
+<h4>성능 메모</h4>
+<p>최고 성능을 원하면 같은 GC로(구성 요소를 바꾸지 않고) 최대한 많이 그린다. GC 구성 요소를 바꾸는 비용과 GC를 여러 개 쓰는 비용 중 무엇이 더 큰지는 하드웨어와 서버 구현에 달려 있다. 다만 GC 정보 일부가 디스플레이 하드웨어에 캐시되고, 그 하드웨어는 GC를 몇 개밖에 캐시하지 못할 가능성이 크다. 실무에서는 "용도별로 GC를 몇 개 만들어 두고 바꾸지 않고 쓴다"가 흔한 방식이다.</p>
+
+<h4>dashes, clip_mask, subwindow_mode</h4>
+<p><b>dashes</b> 값은 <code>XSetDashes</code>로 정하는 일반 패턴의 간단한 형태다. 값 N은 <code>XSetDashes</code>에 두 원소 목록 [N, N]을 준 것과 같다. 0이면 <code>BadValue</code>.</p>
+<p><b>clip_mask</b>는 목적지 드로어블에 쓰는 것을 제한한다.</p>
+<ul>
+<li>픽스맵으로 정하면 깊이 1이고 GC와 루트가 같아야 한다(아니면 <code>BadMatch</code>). 비트가 1인 곳만 그려지고, 0인 곳이나 마스크가 덮지 않는 바깥은 그려지지 않는다.</li>
+<li><code>None</code>이면 클립 원점과 상관없이 언제나 그린다.</li>
+<li><code>XSetClipRectangles</code>나 <code>XSetRegion</code>으로도 정할 수 있다.</li>
+<li>clip-mask는 모든 그리기 요청에 적용되지만 <b>원본은 클리핑하지 않는다</b>(목적지에만 적용). 원점은 목적지 드로어블 원점 기준이다.</li>
+</ul>
+<p><b>subwindow_mode</b>는 <code>ClipByChildren</code> 또는 <code>IncludeInferiors</code>다. <code>ClipByChildren</code>이면 원본·목적지 윈도가 보이는 <code>InputOutput</code> 자식들에 의해 추가로 잘린다(자식 위에는 안 그려진다). <code>IncludeInferiors</code>이면 자손에 의해 잘리지 않는다. 그래서 원본에 자식 윈도 내용이 포함되고, 목적지에서는 자식 경계를 뚫고 그려진다. 깊이가 다른 맵된 자손이 있는 윈도에 <code>IncludeInferiors</code>를 쓰는 것은 불법은 아니지만 결과는 핵심 프로토콜이 정하지 않는다.</p>
+<div class="tip">루트 윈도에 <code>IncludeInferiors</code> GC로 그리면 모든 창 위에 그릴 수 있다. 옛 윈도 매니저가 창을 끌 때 외곽선을 그리던 방법이고, 스크린샷을 찍을 때 루트에서 <code>XCopyArea</code>로 복사할 때도 이 모드가 필요하다.</div>
+
+<h4>fill_rule</h4>
+<p><code>XFillPolygon</code>에서 어떤 픽셀이 "안쪽"인지 정한다.</p>
+<ul>
+<li><code>EvenOddRule</code>: 그 점에서 뻗은 무한 반직선이 경로를 홀수 번 지나면 안쪽.</li>
+<li><code>WindingRule</code>: 반직선을 지나는 시계 방향 선분과 반시계 방향 선분의 수가 다르면 안쪽. 점에서 보아 반직선을 왼쪽에서 오른쪽으로 지나는 선분이 시계 방향, 오른쪽에서 왼쪽이 반시계 방향이다. 선분이 반직선과 겹치는 경우는 다른 반직선을 고르면 되므로 따지지 않는다.</li>
+</ul>
+<p>두 규칙 모두 점은 크기가 없고 경로는 두께가 없다고 본다. 픽셀은 중심이 안쪽에 있고 경계 위가 아닐 때 안쪽이다. 중심이 경계 위라면 다각형 내부가 바로 오른쪽(x 증가 방향)에 있을 때만 안쪽이다. 가로 경계 위의 중심은 특수한 경우로, 내부가 바로 아래(y 증가 방향)에 있을 때만 안쪽이다.</p>
+<div class="tip">별 모양(오각별)을 꼭짓점 다섯 개로 그리면, <code>EvenOddRule</code>은 가운데 오각형이 비고 <code>WindingRule</code>은 가운데까지 다 채워진다. 기본값은 <code>EvenOddRule</code>이다.</div>
+
+<h4>arc_mode와 graphics_exposures</h4>
+<p><b>arc_mode</b>는 <code>XFillArcs</code>의 채우기 방식이다. <code>ArcPieSlice</code>는 부채꼴(중심까지 이어서 채움), <code>ArcChord</code>는 활꼴(호의 양 끝을 직선으로 이어 채움)이다.</p>
+<p><b>graphics_exposures</b>는 <code>XCopyArea</code>, <code>XCopyPlane</code>(그리고 확장이 정의한 비슷한 요청)에서 <code>GraphicsExpose</code> 이벤트를 만들지 정한다. 복사 원본의 일부가 가려져 있어 복사할 수 없었을 때 "이 부분은 직접 다시 그려라"라고 알려 주는 이벤트다.</p>
+
+<h3>7.2 GC 만들기·복사·바꾸기·읽기·없애기</h3>
+
+<h4>XCreateGC</h4>
+<pre><code>GC XCreateGC(Display *display, Drawable d, unsigned long valuemask, XGCValues *values);</code></pre>
+<p>드로어블 <code>d</code>와 같은 화면·깊이에서 쓸 수 있는 GC를 만든다.</p>
+<ul>
+<li><code>valuemask</code>: <code>values</code> 중 어느 멤버를 쓸지 나타내는 마스크 비트의 OR. 0이면 모두 기본값(이때 <code>values</code>는 NULL이어도 된다).</li>
+<li>만든 GC는 <code>d</code>와 루트·깊이가 같은 드로어블에만 쓸 수 있다. 다른 드로어블에 쓰면 <code>BadMatch</code>.</li>
+<li>오류: <code>BadAlloc</code>, <code>BadDrawable</code>, <code>BadFont</code>, <code>BadMatch</code>, <code>BadPixmap</code>, <code>BadValue</code>.</li>
+</ul>
+<pre><code>XGCValues v;
+v.foreground = BlackPixel(dpy, scr);
+v.background = WhitePixel(dpy, scr);
+v.line_width = 3;
+v.cap_style  = CapRound;
+v.join_style = JoinRound;
+GC gc = XCreateGC(dpy, win,
+                  GCForeground | GCBackground | GCLineWidth | GCCapStyle | GCJoinStyle,
+                  &amp;v);</code></pre>
+<div class="tip">가장 흔한 <code>BadMatch</code> 원인은 깊이 불일치다. 윈도(깊이 24)로 만든 GC로 깊이 1 비트맵에 그리거나, ARGB 비주얼(깊이 32) 윈도에 기본 깊이 GC를 쓰는 경우다. 그릴 드로어블마다 같은 깊이의 드로어블로 GC를 만든다.</div>
+
+<h4>XCopyGC</h4>
+<pre><code>XCopyGC(Display *display, GC src, unsigned long valuemask, GC dest);</code></pre>
+<p><code>src</code> GC의 구성 요소 중 <code>valuemask</code>로 고른 것을 <code>dest</code> GC로 복사한다. 두 GC는 루트와 깊이가 같아야 한다(아니면 <code>BadMatch</code>). 오류: <code>BadAlloc</code>, <code>BadGC</code>, <code>BadMatch</code>.</p>
+<div class="tip">매뉴얼 본문의 시그니처 줄은 <code>XCopyGC(display, src, dest, valuemask)</code> 순서로 적혀 있지만, 실제 <code>&lt;X11/Xlib.h&gt;</code> 선언은 위처럼 <code>valuemask</code>가 셋째, <code>dest</code>가 넷째다. 두 GC 인자 사이에 마스크가 온다는 점을 헤더로 확인하고 쓴다.</div>
+
+<h4>XChangeGC</h4>
+<pre><code>XChangeGC(Display *display, GC gc, unsigned long valuemask, XGCValues *values);</code></pre>
+<p>GC의 구성 요소 중 <code>valuemask</code>로 고른 것을 바꾼다. 값과 제약은 <code>XCreateGC</code>와 같다.</p>
+<ul>
+<li>clip-mask를 바꾸면 이전의 <code>XSetClipRectangles</code> 설정이 덮어써진다.</li>
+<li>dash-offset이나 dash-list를 바꾸면 이전의 <code>XSetDashes</code> 설정이 덮어써진다.</li>
+<li>구성 요소를 검사하고 바꾸는 순서는 서버마다 다르다. 오류가 나면 일부만 바뀌어 있을 수 있다.</li>
+<li>오류: <code>BadAlloc</code>, <code>BadFont</code>, <code>BadGC</code>, <code>BadMatch</code>, <code>BadPixmap</code>, <code>BadValue</code>.</li>
+</ul>
+
+<h4>XGetGCValues</h4>
+<pre><code>Status XGetGCValues(Display *display, GC gc, unsigned long valuemask, XGCValues *values_return);</code></pre>
+<p>GC의 구성 요소 중 <code>valuemask</code>로 고른 것을 읽어 온다. Xlib 캐시에서 읽으므로 서버 왕복이 없다.</p>
+<ul>
+<li>마스크에 유효한 비트(<code>GCFunction</code>, <code>GCPlaneMask</code>, <code>GCForeground</code>, <code>GCBackground</code>, <code>GCLineWidth</code>, <code>GCLineStyle</code>, <code>GCCapStyle</code>, <code>GCJoinStyle</code>, <code>GCFillStyle</code>, <code>GCFillRule</code>, <code>GCTile</code>, <code>GCStipple</code>, <code>GCTileStipXOrigin</code>, <code>GCTileStipYOrigin</code>, <code>GCFont</code>, <code>GCSubwindowMode</code>, <code>GCGraphicsExposures</code>, <code>GCClipXOrigin</code>, <code>GCClipYOrigin</code>, <code>GCDashOffset</code>, <code>GCArcMode</code>)만 있고 오류가 없으면 값을 채우고 0이 아닌 값을 돌려준다. 아니면 0.</li>
+<li><code>GCClipMask</code>와 <code>GCDashList</code>는 요청할 수 없다.</li>
+<li><code>GCFont</code>, <code>GCTile</code>, <code>GCStipple</code>은 클라이언트가 한 번도 명시적으로 정하지 않았으면 <b>유효하지 않은 자원 ID</b>(상위 3비트 중 하나 이상이 1)가 돌아온다.</li>
+</ul>
+<div class="tip">기본 폰트를 알아내려고 <code>XGetGCValues(..., GCFont, ...)</code>를 하면 쓸모없는 ID가 나올 수 있다. 그 ID를 <code>XQueryFont</code> 등에 넘기면 <code>BadFont</code>다. 폰트를 쓸 거라면 처음부터 직접 정한다.</div>
+
+<h4>XFreeGC</h4>
+<pre><code>XFreeGC(Display *display, GC gc);</code></pre>
+<p>GC와 관련 저장 공간을 모두 없앤다. 오류: <code>BadGC</code>.</p>
+
+<h4>XGContextFromGC</h4>
+<pre><code>GContext XGContextFromGC(GC gc);</code></pre>
+<p>Xlib의 <code>GC</code>는 사실 클라이언트 쪽 구조체 포인터이고, 그 안에 서버 자원 ID가 들어 있다. 이 함수는 그 서버 쪽 ID(<code>GContext</code>)를 꺼낸다. <code>XQueryFont</code>에 GC의 폰트를 물을 때나 확장 라이브러리를 만들 때 쓴다. 자주 쓰지 않아 요약만 한다.</p>
+
+<h4>XFlushGC</h4>
+<pre><code>void XFlushGC(Display *display, GC gc);</code></pre>
+<p>앞에서 본 것처럼 Xlib는 GC 변경을 그 GC로 실제로 그릴 때까지 미뤄 두고 한꺼번에 보낸다. 그런데 프로토콜 확장이 GC를 간접적으로 써서 확장 인터페이스가 어떤 GC가 쓰일지 모르는 경우처럼, 변경을 지금 바로 서버에 보내야 할 때가 있다. 그때 <code>XFlushGC</code>를 부른다. 일반 Xlib 그리기 함수만 쓴다면 필요 없다.</p>
+<div class="tip"><code>XFlushGC</code>는 GC 변경을 출력 버퍼에 넣을 뿐이다. 버퍼 자체를 서버로 보내는 <code>XFlush</code>와는 다르다.</div>
+
+<h3>7.3 GC 편의 함수 (Using Graphics Context Convenience Routines)</h3>
+<p><code>XChangeGC</code>로 무엇이든 바꿀 수 있지만, 자주 바꾸는 값은 구조체와 마스크를 준비하지 않고 한 줄로 바꿀 수 있는 편의 함수가 있다. 내부적으로는 Xlib 캐시를 고칠 뿐이라 여러 번 불러도 다음 그리기 때 요청 하나로 묶인다. 이 절은 전경·배경·함수·플레인 마스크, 선 속성과 대시, 채우기 스타일과 규칙, 타일과 스티플, 폰트, 클립 영역, 호 모드·서브윈도 모드·그래픽 노출 순서로 다룬다.</p>
+
+<h4>전경, 배경, 함수, 플레인 마스크</h4>
+<pre><code>XSetState(Display *display, GC gc, unsigned long foreground,
+          unsigned long background, int function, unsigned long plane_mask);
+XSetForeground(Display *display, GC gc, unsigned long foreground);
+XSetBackground(Display *display, GC gc, unsigned long background);
+XSetFunction(Display *display, GC gc, int function);
+XSetPlaneMask(Display *display, GC gc, unsigned long plane_mask);</code></pre>
+<ul>
+<li><code>XSetState</code>: 네 가지를 한 번에 정한다. 오류: <code>BadAlloc</code>, <code>BadGC</code>, <code>BadValue</code>.</li>
+<li><code>XSetForeground</code> / <code>XSetBackground</code>: 전경/배경 픽셀. 오류: <code>BadAlloc</code>, <code>BadGC</code>.</li>
+<li><code>XSetFunction</code>: 논리 연산(<code>GXcopy</code>, <code>GXxor</code> 등). 오류: <code>BadAlloc</code>, <code>BadGC</code>, <code>BadValue</code>.</li>
+<li><code>XSetPlaneMask</code>: 플레인 마스크. 오류: <code>BadAlloc</code>, <code>BadGC</code>.</li>
+</ul>
+<div class="tip">전경·배경은 RGB가 아니라 <b>픽셀 값</b>이다. <code>0xff0000</code>을 넣으면 트루컬러 화면에서는 우연히 빨강이 되지만, 다른 비주얼에서는 엉뚱한 색이 된다. 이식성 있게 하려면 <code>XAllocColor</code>(6장)로 얻은 <code>pixel</code>을 넣는다.</div>
+
+<h4>선 속성과 대시</h4>
+<pre><code>XSetLineAttributes(Display *display, GC gc, unsigned int line_width,
+                   int line_style, int cap_style, int join_style);</code></pre>
+<p>선 두께와 세 가지 스타일을 한 번에 정한다. <code>line_style</code>은 <code>LineSolid</code>, <code>LineOnOffDash</code>, <code>LineDoubleDash</code>, <code>cap_style</code>은 <code>CapNotLast</code>, <code>CapButt</code>, <code>CapRound</code>, <code>CapProjecting</code>, <code>join_style</code>은 <code>JoinMiter</code>, <code>JoinRound</code>, <code>JoinBevel</code> 중 하나다. 오류: <code>BadAlloc</code>, <code>BadGC</code>, <code>BadValue</code>.</p>
+
+<pre><code>XSetDashes(Display *display, GC gc, int dash_offset, char dash_list[], int n);</code></pre>
+<p>점선 패턴을 정한다.</p>
+<ul>
+<li><code>dash_list</code>: 대시 길이(픽셀) 목록. 첫 원소와 그 뒤 하나 건너 원소들(1, 3, 5번째...)이 짝수 대시(그려지는 부분), 나머지가 홀수 대시(빈 부분 또는 <code>LineDoubleDash</code>의 배경 부분)다. 원소가 하나 이상 있어야 하고 모두 0이 아니어야 한다(아니면 <code>BadValue</code>).</li>
+<li>홀수 길이 목록은 자기 자신을 이어 붙여 짝수 길이로 만든 것과 같다. 예: [3, 2, 1] → [3, 2, 1, 3, 2, 1].</li>
+<li><code>dash_offset</code>: 패턴의 위상. 각 그리기 요청에서 패턴을 목록의 몇 픽셀 지점부터 시작할지. 대시는 join으로 이어진 경로 요소들 사이에서는 이어지지만, 이어진 선의 묶음이 바뀔 때마다 dash_offset으로 리셋된다.</li>
+<li>대시 길이의 단위는 일반 좌표계와 같다. 이상적으로는 선의 기울기를 따라 재지만, 구현은 가로·세로 선에서만 이 이상을 맞추면 된다. 그 밖에는 주축(major axis)을 따라 재기를 권한다. 주축은 x축과 −45~+45도 또는 135~225도인 선은 x축, 그 밖은 y축이다.</li>
+<li>오류: <code>BadAlloc</code>, <code>BadGC</code>, <code>BadValue</code>.</li>
+</ul>
+<pre><code>static char dash[] = { 8, 3, 2, 3 };              /* 긴 대시, 짧은 점 */
+XSetLineAttributes(dpy, gc, 1, LineOnOffDash, CapButt, JoinMiter);
+XSetDashes(dpy, gc, 0, dash, 4);
+XDrawLine(dpy, win, gc, 10, 10, 190, 10);
+
+/* 행진하는 개미: offset을 조금씩 바꿔 다시 그린다 */
+for (int phase = 0; phase &lt; 16; phase++) {
+    XSetDashes(dpy, gc, phase, dash, 4);
+    XDrawRectangle(dpy, win, gc, 20, 20, 100, 60);
+    XFlush(dpy);
+    usleep(50000);
+}</code></pre>
+<div class="tip"><code>dash_list</code>는 <code>char</code> 배열이라 대시 하나의 길이가 한 바이트에 담겨야 한다. 아주 긴 대시는 만들 수 없다. 또 <code>XSetLineAttributes</code>로 대시 스타일을 켜지 않으면 <code>XSetDashes</code>만으로는 아무 변화가 없다.</div>
+
+<h4>채우기 스타일과 채우기 규칙</h4>
+<pre><code>XSetFillStyle(Display *display, GC gc, int fill_style);
+XSetFillRule(Display *display, GC gc, int fill_rule);</code></pre>
+<ul>
+<li><code>XSetFillStyle</code>: <code>FillSolid</code>, <code>FillTiled</code>, <code>FillStippled</code>, <code>FillOpaqueStippled</code> 중 하나. 오류: <code>BadAlloc</code>, <code>BadGC</code>, <code>BadValue</code>.</li>
+<li><code>XSetFillRule</code>: <code>EvenOddRule</code> 또는 <code>WindingRule</code>. 오류: <code>BadAlloc</code>, <code>BadGC</code>, <code>BadValue</code>.</li>
+</ul>
+
+<h4>타일과 스티플 설정</h4>
+<p>어떤 디스플레이는 특정 크기의 무늬에 대해 하드웨어 타일링·스티플링을 지원한다. 그 크기에 맞춘 연산은 임의 크기보다 훨씬 빠르다. Xlib는 가장 좋은 크기를 알아내는 함수와, 타일·스티플과 그 원점을 정하는 함수를 제공한다.</p>
+
+<pre><code>Status XQueryBestSize(Display *display, int class, Drawable which_screen,
+                      unsigned int width, unsigned int height,
+                      unsigned int *width_return, unsigned int *height_return);</code></pre>
+<p>원하는 크기를 주면 하드웨어가 가장 잘 지원하는 크기(가장 가까운 크기)를 돌려준다.</p>
+<ul>
+<li><code>class</code>: <code>TileShape</code>(가장 빨리 타일링되는 크기), <code>StippleShape</code>(가장 빨리 스티플링되는 크기), <code>CursorShape</code>(그 화면에 완전히 표시할 수 있는 가장 큰 커서 크기).</li>
+<li><code>which_screen</code>: <code>CursorShape</code>면 화면만 나타낸다. <code>TileShape</code>/<code>StippleShape</code>면 화면과 함께 윈도 클래스·깊이도 나타낼 수 있다. 그래서 이 둘에 <code>InputOnly</code> 윈도를 쓰면 <code>BadMatch</code>.</li>
+<li>오류: <code>BadDrawable</code>, <code>BadMatch</code>, <code>BadValue</code>.</li>
+</ul>
+
+<pre><code>Status XQueryBestTile(Display *display, Drawable which_screen, unsigned int width,
+                      unsigned int height, unsigned int *width_return,
+                      unsigned int *height_return);
+Status XQueryBestStipple(Display *display, Drawable which_screen, unsigned int width,
+                         unsigned int height, unsigned int *width_return,
+                         unsigned int *height_return);</code></pre>
+<p>각각 <code>XQueryBestSize</code>에 <code>TileShape</code>, <code>StippleShape</code>를 준 것과 같다. 드로어블은 화면과 윈도 클래스·깊이를 나타내고, <code>InputOnly</code> 윈도면 <code>BadMatch</code>. 오류: <code>BadDrawable</code>, <code>BadMatch</code>.</p>
+
+<pre><code>XSetTile(Display *display, GC gc, Pixmap tile);
+XSetStipple(Display *display, GC gc, Pixmap stipple);
+XSetTSOrigin(Display *display, GC gc, int ts_x_origin, int ts_y_origin);</code></pre>
+<ul>
+<li><code>XSetTile</code>: 타일 픽스맵을 정한다. 타일과 GC의 깊이가 같아야 한다(아니면 <code>BadMatch</code>). 오류: <code>BadAlloc</code>, <code>BadGC</code>, <code>BadMatch</code>, <code>BadPixmap</code>.</li>
+<li><code>XSetStipple</code>: 스티플을 정한다. 깊이 1이어야 한다(아니면 <code>BadMatch</code>). 오류: <code>BadAlloc</code>, <code>BadGC</code>, <code>BadMatch</code>, <code>BadPixmap</code>.</li>
+<li><code>XSetTSOrigin</code>: 타일·스티플 원점. 그리기 요청의 목적지 드로어블 원점 기준으로 해석된다. 오류: <code>BadAlloc</code>, <code>BadGC</code>.</li>
+</ul>
+<pre><code>/* 50% 회색 무늬(체크무늬) 스티플로 사각형 채우기 */
+static char gray_bits[] = { 0x01, 0x02 };          /* 2x2 체크 */
+Pixmap gray = XCreateBitmapFromData(dpy, win, gray_bits, 2, 2);
+XSetStipple(dpy, gc, gray);
+XSetFillStyle(dpy, gc, FillStippled);             /* 1인 곳만 전경색으로 */
+XFillRectangle(dpy, win, gc, 10, 10, 100, 50);
+XSetFillStyle(dpy, gc, FillSolid);                /* 다른 그리기를 위해 되돌림 */</code></pre>
+<div class="tip">fill_style을 바꾸고 되돌리지 않으면 이후 모든 선과 글자까지 스티플로 그려진다. GC는 상태 기계라서 바꾼 값이 계속 남는다. 자주 바꾼다면 스티플 전용 GC를 따로 만드는 편이 깔끔하다. 또 스크롤되는 영역에서 무늬가 같이 움직이길 원하면 <code>XSetTSOrigin</code>으로 원점도 옮겨야 한다.</div>
+
+<h4>현재 폰트</h4>
+<pre><code>XSetFont(Display *display, GC gc, Font font);</code></pre>
+<p>텍스트 그리기에 쓸 폰트를 정한다. 폰트 ID는 <code>XLoadFont</code>나 <code>XLoadQueryFont</code>(8장)로 얻는다(<code>XFontStruct</code>라면 그 <code>fid</code> 멤버). 오류: <code>BadAlloc</code>, <code>BadFont</code>, <code>BadGC</code>.</p>
+
+<h4>클립 영역</h4>
+<p>클립 원점과 clip-mask를 정하거나, clip-mask를 사각형 목록으로 정하는 함수들이다.</p>
+<pre><code>XSetClipOrigin(Display *display, GC gc, int clip_x_origin, int clip_y_origin);
+XSetClipMask(Display *display, GC gc, Pixmap pixmap);</code></pre>
+<ul>
+<li><code>XSetClipOrigin</code>: clip-mask 원점. 목적지 드로어블 원점 기준. 오류: <code>BadAlloc</code>, <code>BadGC</code>.</li>
+<li><code>XSetClipMask</code>: clip-mask를 깊이 1 픽스맵 또는 <code>None</code>으로 정한다. <code>None</code>이면 원점과 상관없이 언제나 그린다. 오류: <code>BadAlloc</code>, <code>BadGC</code>, <code>BadMatch</code>, <code>BadPixmap</code>.</li>
+</ul>
+
+<pre><code>XSetClipRectangles(Display *display, GC gc, int clip_x_origin, int clip_y_origin,
+                   XRectangle rectangles[], int n, int ordering);</code></pre>
+<p>clip-mask를 사각형 목록으로 바꾸고 클립 원점도 정한다. 그리기는 이 사각형들 안으로만 제한된다.</p>
+<ul>
+<li>클립 원점은 목적지 드로어블 원점 기준이고, 사각형 좌표는 <b>클립 원점 기준</b>이다.</li>
+<li>사각형들은 서로 겹치지 않아야 한다. 겹치면 결과가 정해져 있지 않다.</li>
+<li>목록이 비어 있으면(<code>n = 0</code>) 출력이 완전히 막힌다. 이것은 clip-mask에 <code>None</code>을 주는 것(모두 그림)과 정반대다.</li>
+<li><code>ordering</code>: 사각형의 정렬 상태를 알려 주면 서버가 더 빨리 처리할 수 있다.
+  <ul>
+  <li><code>Unsorted</code>: 아무 순서.</li>
+  <li><code>YSorted</code>: Y 원점이 감소하지 않는 순서.</li>
+  <li><code>YXSorted</code>: <code>YSorted</code>에 더해, Y 원점이 같은 사각형들은 X 원점이 감소하지 않는 순서.</li>
+  <li><code>YXBanded</code>: <code>YXSorted</code>에 더해, 어떤 가로 줄(scanline)이든 그 줄을 포함하는 사각형들의 Y 원점과 Y 범위가 모두 같다(띠 모양으로 정렬).</li>
+  </ul></li>
+<li>틀린 ordering을 주면 서버가 <code>BadMatch</code>를 낼 수도 있지만 반드시 내지는 않는다. 오류가 안 나면 결과가 정해져 있지 않다. 확실하지 않으면 <code>Unsorted</code>를 준다.</li>
+<li>오류: <code>BadAlloc</code>, <code>BadGC</code>, <code>BadMatch</code>, <code>BadValue</code>.</li>
+</ul>
+<pre><code>/* Expose 이벤트의 영역만 다시 그리기 */
+XRectangle r = { ev.xexpose.x, ev.xexpose.y, ev.xexpose.width, ev.xexpose.height };
+XSetClipRectangles(dpy, gc, 0, 0, &amp;r, 1, Unsorted);
+redraw_everything(dpy, win, gc);         /* 바깥은 서버가 알아서 잘라 낸다 */
+XSetClipMask(dpy, gc, None);             /* 클리핑 해제 */</code></pre>
+<div class="tip">클리핑을 걸고 풀지 않는 것이 흔한 버그다. "왜 화면 일부에만 그려지지?" 싶으면 GC에 클립이 남아 있는지 확인한다. 또 <code>XChangeGC</code>로 clip-mask를 바꾸면 이전 <code>XSetClipRectangles</code> 설정은 덮어써진다. 여러 사각형을 합치거나 빼는 계산이 필요하면 16.5절의 리전(region) 함수와 <code>XSetRegion</code>을 쓴다.</div>
+
+<h4>호 모드, 서브윈도 모드, 그래픽 노출</h4>
+<pre><code>XSetArcMode(Display *display, GC gc, int arc_mode);
+XSetSubwindowMode(Display *display, GC gc, int subwindow_mode);
+XSetGraphicsExposures(Display *display, GC gc, Bool graphics_exposures);</code></pre>
+<ul>
+<li><code>XSetArcMode</code>: <code>ArcChord</code>(활꼴) 또는 <code>ArcPieSlice</code>(부채꼴). 오류: <code>BadAlloc</code>, <code>BadGC</code>, <code>BadValue</code>.</li>
+<li><code>XSetSubwindowMode</code>: <code>ClipByChildren</code> 또는 <code>IncludeInferiors</code>. 오류: <code>BadAlloc</code>, <code>BadGC</code>, <code>BadValue</code>.</li>
+<li><code>XSetGraphicsExposures</code>: 이 GC로 <code>XCopyArea</code>, <code>XCopyPlane</code>을 할 때 <code>GraphicsExpose</code>와 <code>NoExpose</code> 이벤트를 보고할지. 오류: <code>BadAlloc</code>, <code>BadGC</code>, <code>BadValue</code>.</li>
+</ul>
+<div class="tip">기본값이 <code>True</code>라서, 픽스맵에서 윈도로 <code>XCopyArea</code>를 할 때마다 <code>NoExpose</code> 이벤트가 하나씩 큐에 쌓인다. 더블 버퍼링처럼 원본이 언제나 온전한 픽스맵이라면 이 이벤트가 필요 없으므로 <code>XSetGraphicsExposures(dpy, gc, False)</code>로 꺼 둔다. 반대로 윈도 안에서 스크롤하려고 윈도→윈도 복사를 한다면 켜 두고 <code>GraphicsExpose</code>를 받아 가려졌던 부분을 다시 그려야 한다.</div>
+
+<h4>종합 예제</h4>
+<pre><code>/* gcdemo.c — cc gcdemo.c -lX11 */
+#include &lt;X11/Xlib.h&gt;
+
+int main(void)
+{
+    Display *dpy = XOpenDisplay(NULL);
+    if (!dpy) return 1;
+    int scr = DefaultScreen(dpy);
+    unsigned long black = BlackPixel(dpy, scr), white = WhitePixel(dpy, scr);
+    Window win = XCreateSimpleWindow(dpy, RootWindow(dpy, scr), 0, 0, 320, 200, 1, black, white);
+    XSelectInput(dpy, win, ExposureMask | KeyPressMask);
+    XMapWindow(dpy, win);
+
+    /* 용도별 GC 두 개: 굵은 둥근 선, 점선 */
+    XGCValues v;
+    v.foreground = black; v.background = white;
+    v.line_width = 8; v.cap_style = CapRound; v.join_style = JoinRound;
+    GC thick = XCreateGC(dpy, win, GCForeground | GCBackground | GCLineWidth |
+                                   GCCapStyle | GCJoinStyle, &amp;v);
+
+    GC dashed = XCreateGC(dpy, win, 0, NULL);
+    XSetState(dpy, dashed, black, white, GXcopy, AllPlanes);
+    XSetLineAttributes(dpy, dashed, 2, LineDoubleDash, CapButt, JoinMiter);
+    static char d[] = { 10, 5 };
+    XSetDashes(dpy, dashed, 0, d, 2);
+
+    XPoint zig[] = { {20,150}, {70,60}, {120,150}, {170,60} };
+    for (;;) {
+        XEvent ev;
+        XNextEvent(dpy, &amp;ev);
+        if (ev.type == Expose &amp;&amp; ev.xexpose.count == 0) {
+            XDrawLines(dpy, win, thick, zig, 4, CoordModeOrigin);
+            XDrawRectangle(dpy, win, dashed, 200, 40, 100, 120);
+            XFillArc(dpy, win, thick, 220, 70, 60, 60, 0, 270 * 64);  /* ArcPieSlice 기본 */
+        } else if (ev.type == KeyPress) break;
+    }
+    XFreeGC(dpy, thick);
+    XFreeGC(dpy, dashed);
+    XCloseDisplay(dpy);
+    return 0;
+}</code></pre>
+<p>이 예제에서 <code>dashed</code>는 <code>LineDoubleDash</code>이고 fill_style이 <code>FillSolid</code>이므로, 짝수 대시는 전경(검정), 홀수 대시는 배경(흰색)으로 그려진다. 흰 바탕에서는 <code>LineOnOffDash</code>와 비슷해 보이지만, 배경색을 바꾸면 차이가 바로 보인다.</p>
+</section><div class="pager"><a href="ch6.html">← 6장. 색 관리 함수 (Color Management Functions)</a><a href="./">차례</a><a href="ch8.html">8장. 그래픽 함수 (Graphics Functions) →</a></div>
+<a class="top" href="#">↑ 위로</a>
+</html>

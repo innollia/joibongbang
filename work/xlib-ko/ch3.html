@@ -1,0 +1,586 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>3장. 창 함수 (Window Functions) — Xlib 한국어</title>
+<style>
+body{font:16px/1.75 system-ui,"Malgun Gothic",sans-serif;max-width:860px;margin:40px auto;padding:0 16px;background:#111;color:#e8e8e8}
+a{color:#7cf} h1{line-height:1.3} h2{margin-top:3em;border-bottom:1px solid #444;padding-bottom:.3em} h2 small{color:#999;font-weight:normal;font-size:.6em}
+h3{margin-top:2em;color:#fd8} h4{color:#9df}
+code{font-family:ui-monospace,Consolas,monospace;font-size:.92em;background:#222;padding:1px 4px;border-radius:3px}
+pre{background:#1b1d22;border:1px solid #333;padding:12px;overflow-x:auto;border-radius:6px;line-height:1.45} pre code{background:none;padding:0}
+.tip{background:#1d2a1d;border-left:4px solid #6c6;padding:8px 12px;margin:1em 0;border-radius:4px}
+table{border-collapse:collapse;margin:1em 0;font-size:.92em;display:block;overflow-x:auto} td,th{border:1px solid #444;padding:4px 8px;vertical-align:top} th{background:#222}
+nav ol{columns:2} .top{position:fixed;right:16px;bottom:16px;background:#333;padding:6px 10px;border-radius:6px;text-decoration:none}
+.pager{display:flex;justify-content:space-between;gap:12px;margin:2em 0;padding-top:1em;border-top:1px solid #444} .pager a{text-decoration:none}
+</style>
+<p><a href="../../">← 조이봉방</a> · <a href="./">Xlib 번역 차례</a></p><div class="pager"><a href="ch2.html">← 2장. 디스플레이 함수 (Display Functions)</a><a href="./">차례</a><a href="ch4.html">4장. 윈도 정보 함수 (Window Information Functions) →</a></div><section id="ch3"><h2 style="margin-top:1em">3장. 창 함수 <small>(Window Functions)</small></h2>
+
+<p>이 장은 창을 만들고, 없애고, 화면에 띄우고(map), 내리고(unmap), 옮기고, 크기를 바꾸고, 쌓는 순서를 바꾸고, 속성을 바꾸는 함수를 다룬다. 그 전에 창이 색을 다루는 방식인 비주얼(visual)과 창 속성(attribute)을 먼저 설명한다. X 프로그래밍에서 가장 기본이 되는 장이다.</p>
+
+<h3>3.1 비주얼 타입</h3>
+<p>디스플레이 하드웨어에 따라 색을 다루는 방법이 여러 가지일 수 있다. 예를 들어 같은 스크린에서 "12비트 깊이에 픽셀&rarr;색 대응을 마음대로 정하는 방식(pseudo-color)"과 "24비트 깊이에 빨강·초록·파랑에 8비트씩 쓰는 방식"을 둘 다 고를 수 있다. 이런 "화면의 색 표현 방식"을 <strong>비주얼(visual)</strong>이라고 한다. 각 스크린마다 깊이별로 지원되는 비주얼 목록이 있다.</p>
+<p>스크린마다 기본 창과 기본 비주얼이 정해져 있으므로, <strong>대부분의 단순한 응용은 이 복잡함을 신경 쓸 필요가 없다</strong>. 기본 루트 창, 기본 깊이, 기본 비주얼을 돌려주는 매크로를 쓰면 된다(2.2.1절, 16.7절).</p>
+<p>Xlib은 색 대응 정보를 담은 불투명(opaque) 구조체 <code>Visual</code>을 쓴다. 응용이 그 내용을 보려면 비주얼 유틸리티 함수(16.7절)가 돌려주는 <code>XVisualInfo</code> 구조체를 쓴다. 여기서 중요한 멤버는 <code>class</code>, <code>red_mask</code>, <code>green_mask</code>, <code>blue_mask</code>, <code>bits_per_rgb</code>, <code>colormap_size</code>이다.</p>
+
+<h4>비주얼 클래스 6가지</h4>
+<p><code>class</code>는 <code>StaticGray</code>, <code>StaticColor</code>, <code>TrueColor</code>, <code>GrayScale</code>, <code>PseudoColor</code>, <code>DirectColor</code> 중 하나다. 세 가지 질문으로 나누면 이해하기 쉽다: 컬러인가 회색조인가? 컬러맵을 바꿀 수 있는가(R/W) 읽기 전용인가(R/O)? 픽셀 값을 R/G/B 조각으로 나눠(decomposed) 쓰는가?</p>
+<table>
+<tr><th></th><th>컬러, R/O</th><th>컬러, R/W</th><th>회색조, R/O</th><th>회색조, R/W</th></tr>
+<tr><td>나누지 않은 컬러맵</td><td><code>StaticColor</code></td><td><code>PseudoColor</code></td><td><code>StaticGray</code></td><td><code>GrayScale</code></td></tr>
+<tr><td>R/G/B로 나눈 컬러맵</td><td><code>TrueColor</code></td><td><code>DirectColor</code></td><td>&mdash;</td><td>&mdash;</td></tr>
+</table>
+<p>개념적으로, 픽셀이 비디오 메모리에서 읽혀 화면에 나갈 때 <strong>컬러맵이라는 표를 한 번 거친다</strong>. 컬러맵은 하드웨어에 따라 마음대로, 제한적으로, 또는 전혀 바꿀 수 없다.</p>
+<ul>
+<li><code>PseudoColor</code>: 픽셀 값이 컬러맵의 인덱스이고, 그 항목이 RGB 값을 낸다. RGB는 동적으로 바꿀 수 있다. (예: 8비트 256색 모드)</li>
+<li><code>GrayScale</code>: <code>PseudoColor</code>와 같지만 화면을 구동하는 원색이 정의돼 있지 않다. 그래서 컬러맵에 항상 빨강·초록·파랑에 같은 값을 넣어야 한다.</li>
+<li><code>DirectColor</code>: 픽셀 값을 R, G, B 하위 필드로 나누고 각 필드가 해당 원색의 컬러맵을 따로 인덱싱한다. RGB는 동적으로 바꿀 수 있다.</li>
+<li><code>TrueColor</code>: <code>DirectColor</code>와 같지만 컬러맵이 미리 정해진 읽기 전용이다. 값은 서버에 따라 다르지만 각 원색마다 선형 또는 거의 선형의 단계(ramp)를 이룬다. <strong>요즘 PC의 24/32비트 화면은 거의 다 이것</strong>이다.</li>
+<li><code>StaticColor</code>: <code>PseudoColor</code>와 같지만 컬러맵이 미리 정해진 읽기 전용이다.</li>
+<li><code>StaticGray</code>: <code>StaticColor</code>와 같지만 각 픽셀 값의 RGB가 모두 같아 회색 단계가 된다. 항목이 2개인 <code>StaticGray</code>는 흑백(monochrome)으로 볼 수 있다.</li>
+</ul>
+<h4>XVisualInfo의 다른 멤버</h4>
+<ul>
+<li><code>red_mask</code>, <code>green_mask</code>, <code>blue_mask</code>: <code>DirectColor</code>와 <code>TrueColor</code>에서만 정의된다. 각각 연속된 비트 묶음 하나이고 서로 겹치지 않는다. 예: 흔한 24비트 TrueColor에서 <code>0xff0000</code>, <code>0x00ff00</code>, <code>0x0000ff</code>.</li>
+<li><code>bits_per_rgb</code>: 빨강·초록·파랑 각각이 낼 수 있는 서로 다른 값 개수의 log<sub>2</sub>. 실제 RGB 값 자체는 부호 없는 16비트 수로 표현된다.</li>
+<li><code>colormap_size</code>: 새로 만든 컬러맵에서 쓸 수 있는 항목 수. <code>DirectColor</code>와 <code>TrueColor</code>에서는 픽셀 하위 필드 하나의 크기다.</li>
+</ul>
+
+<pre><code>VisualID XVisualIDFromVisual(Visual *visual);</code></pre>
+<p><strong>목적</strong>: <code>Visual</code>에서 비주얼 ID를 얻는다. <code>Visual</code>은 불투명이라 멤버를 직접 읽지 말고 이 함수를 쓴다.</p>
+<pre><code>/* 기본 비주얼이 TrueColor인지 확인 -- cc vis.c -lX11 */
+#include &lt;stdio.h&gt;
+#include &lt;X11/Xlib.h&gt;
+#include &lt;X11/Xutil.h&gt;
+
+int main(void)
+{
+    Display *dpy = XOpenDisplay(NULL);
+    XVisualInfo tmpl, *vi;
+    int n, s;
+
+    if (!dpy) return 1;
+    s = DefaultScreen(dpy);
+    tmpl.visualid = XVisualIDFromVisual(DefaultVisual(dpy, s));
+    vi = XGetVisualInfo(dpy, VisualIDMask, &amp;tmpl, &amp;n);   /* 16.7절 */
+    if (vi) {
+        printf("class=%d (TrueColor=%d) depth=%d masks=%lx/%lx/%lx\n",
+               vi-&gt;class, TrueColor, vi-&gt;depth,
+               vi-&gt;red_mask, vi-&gt;green_mask, vi-&gt;blue_mask);
+        XFree(vi);
+    }
+    XCloseDisplay(dpy);
+    return 0;
+}</code></pre>
+<div class="tip">C++로 컴파일하면 <code>class</code>가 예약어라 <code>vi-&gt;class</code>를 쓸 수 없다. 이때 Xlib 헤더는 이름을 <code>c_class</code>로 바꿔 준다.</div>
+
+<h3>3.2 창 속성</h3>
+<p>모든 <code>InputOutput</code> 창은 0픽셀 이상의 테두리, 선택적 배경, 이벤트 억제 마스크(자식에서 올라오는 이벤트 전파를 막는 것), 속성 목록(property list, 4.3절)을 가진다. 테두리와 배경은 단색이거나 <strong>타일(tile)</strong>이라 부르는 패턴일 수 있다. 루트를 제외한 모든 창은 부모가 있고 부모에 의해 잘린다.</p>
+<p>창이 다른 창 위에 쌓이면 <em>입력</em> 측면에서 아래 창을 가린다. 배경이 있으면(거의 다 있다) <em>출력</em> 측면에서도 가린다. 가려진 영역에 출력해도 아무 일이 일어나지 않고, 그 영역에서는 포인터 이동 같은 입력 이벤트도 생기지 않는다.</p>
+
+<h4>InputOutput 창과 InputOnly 창</h4>
+<p>창에는 두 클래스가 있다. 보통 창은 <code>InputOutput</code>이다. <code>InputOnly</code> 창은 <strong>보이지 않는 창</strong>으로, 커서 모양, 입력 이벤트 생성, grab 같은 입력 제어에만 쓰고 그리기 요청에는 쓸 수 없다. <code>InputOnly</code> 창은 <code>InputOutput</code> 창을 자식(하위)으로 가질 수 없다. 예를 들어 화면 일부에서만 커서 모양을 바꾸고 싶을 때 투명한 <code>InputOnly</code> 창을 덮어 쓴다.</p>
+<p>두 클래스가 공통으로 갖는 속성이자 <code>InputOnly</code> 창이 가질 수 있는 <strong>유일한</strong> 속성은 win-gravity, event-mask, do-not-propagate-mask, override-redirect, cursor 다섯 가지다. <code>InputOnly</code> 창에 다른 속성을 지정하면 <code>BadMatch</code> 오류가 난다.</p>
+
+<h4>그 밖의 일반 규칙</h4>
+<ul>
+<li>단색은 픽셀 값으로 지정할 수 있다.</li>
+<li>배경·테두리 pixmap은 창을 만든 뒤 더 참조하지 않는다면 바로 해제해도 된다.</li>
+<li>패턴은 부모 기준(<code>ParentRelative</code>, 부모의 배경을 씀)이거나 절대 위치일 수 있다.</li>
+<li>창은 처음 만들 때 <strong>보이지 않는다(unmapped)</strong>. 화면에 보이지 않고 backing store도 없는 창에 그린 것은 버려진다.</li>
+<li>창을 미리 만들어 두었다가 나중에 <code>XMapWindow</code>로 띄울 수 있다. 그때 backing store가 유지되지 않았다면 서버가 <code>Expose</code>를 보낸다.</li>
+</ul>
+<h4>창 관리자와의 관계</h4>
+<p>창 관리자는 최상위 창의 크기, 테두리 두께, 위치에 대한 프로그램의 선택을 무시하고 바꿀 수 있다. 프로그램은 <strong>실제로 받은 크기와 위치</strong>를 쓸 준비가 돼 있어야 한다. 사용자가 직접 명령한 경우가 아니면 응용이 스스로 크기를 바꾸면 안 된다. 받은 공간을 쓰거나, 너무 작아 쓸모가 없으면 사용자에게 크기를 키워 달라고 요청한다. 최상위 창의 테두리는 창 관리자 마음대로 바꿀 수 있는 영역으로 여긴다.</p>
+
+<h4>XSetWindowAttributes와 값 마스크</h4>
+<p>속성을 지정하는 방법은 X 전체에서 반복되는 패턴이다. <strong>구조체의 필요한 멤버만 채우고, 어느 멤버를 채웠는지 비트 마스크로 알려 준다</strong>. 이 마스크를 <code>XCreateWindow</code>나 <code>XChangeWindowAttributes</code>에 넘긴다. 마스크에 없는 멤버는 읽지 않으므로 초기화하지 않아도 된다. 서버에 보내는 데이터도 그만큼 줄어든다.</p>
+<pre><code>/* Window attribute value mask bits */
+#define CWBackPixmap       (1L&lt;&lt;0)
+#define CWBackPixel        (1L&lt;&lt;1)
+#define CWBorderPixmap     (1L&lt;&lt;2)
+#define CWBorderPixel      (1L&lt;&lt;3)
+#define CWBitGravity       (1L&lt;&lt;4)
+#define CWWinGravity       (1L&lt;&lt;5)
+#define CWBackingStore     (1L&lt;&lt;6)
+#define CWBackingPlanes    (1L&lt;&lt;7)
+#define CWBackingPixel     (1L&lt;&lt;8)
+#define CWOverrideRedirect (1L&lt;&lt;9)
+#define CWSaveUnder        (1L&lt;&lt;10)
+#define CWEventMask        (1L&lt;&lt;11)
+#define CWDontPropagate    (1L&lt;&lt;12)
+#define CWColormap         (1L&lt;&lt;13)
+#define CWCursor           (1L&lt;&lt;14)
+
+typedef struct {
+    Pixmap background_pixmap;      /* background, None, or ParentRelative */
+    unsigned long background_pixel;/* background pixel */
+    Pixmap border_pixmap;          /* border of the window or CopyFromParent */
+    unsigned long border_pixel;    /* border pixel value */
+    int bit_gravity;               /* one of bit gravity values */
+    int win_gravity;               /* one of the window gravity values */
+    int backing_store;             /* NotUseful, WhenMapped, Always */
+    unsigned long backing_planes;  /* planes to be preserved if possible */
+    unsigned long backing_pixel;   /* value to use in restoring planes */
+    Bool save_under;               /* should bits under be saved? (popups) */
+    long event_mask;               /* set of events that should be saved */
+    long do_not_propagate_mask;    /* set of events that should not propagate */
+    Bool override_redirect;        /* boolean value for override_redirect */
+    Colormap colormap;             /* color map to be associated with window */
+    Cursor cursor;                 /* cursor to be displayed (or None) */
+} XSetWindowAttributes;</code></pre>
+<p>각 속성의 기본값과 적용 대상은 다음과 같다.</p>
+<table>
+<tr><th>속성</th><th>기본값</th><th>InputOutput</th><th>InputOnly</th></tr>
+<tr><td>background-pixmap</td><td><code>None</code></td><td>예</td><td>아니오</td></tr>
+<tr><td>background-pixel</td><td>정의 안 됨</td><td>예</td><td>아니오</td></tr>
+<tr><td>border-pixmap</td><td><code>CopyFromParent</code></td><td>예</td><td>아니오</td></tr>
+<tr><td>border-pixel</td><td>정의 안 됨</td><td>예</td><td>아니오</td></tr>
+<tr><td>bit-gravity</td><td><code>ForgetGravity</code></td><td>예</td><td>아니오</td></tr>
+<tr><td>win-gravity</td><td><code>NorthWestGravity</code></td><td>예</td><td>예</td></tr>
+<tr><td>backing-store</td><td><code>NotUseful</code></td><td>예</td><td>아니오</td></tr>
+<tr><td>backing-planes</td><td>모두 1</td><td>예</td><td>아니오</td></tr>
+<tr><td>backing-pixel</td><td>0</td><td>예</td><td>아니오</td></tr>
+<tr><td>save-under</td><td><code>False</code></td><td>예</td><td>아니오</td></tr>
+<tr><td>event-mask</td><td>빈 집합</td><td>예</td><td>예</td></tr>
+<tr><td>do-not-propagate-mask</td><td>빈 집합</td><td>예</td><td>예</td></tr>
+<tr><td>override-redirect</td><td><code>False</code></td><td>예</td><td>예</td></tr>
+<tr><td>colormap</td><td><code>CopyFromParent</code></td><td>예</td><td>아니오</td></tr>
+<tr><td>cursor</td><td><code>None</code></td><td>예</td><td>예</td></tr>
+</table>
+
+<h4>3.2.1 배경 속성</h4>
+<p><code>InputOutput</code> 창만 배경을 가진다. 픽셀(단색) 또는 pixmap(패턴)으로 지정한다.</p>
+<ul>
+<li><strong>background-pixel</strong>: 단색 배경. 지정하면 기본 background-pixmap이나 이전에 지정한 pixmap을 덮어쓴다. 내부적으로는 "그 픽셀로 채운 크기 미정의 pixmap"이 배경으로 쓰인다. 범위 검사는 하지 않고 적절한 비트 수로 잘라서 쓴다.</li>
+<li><strong>background-pixmap</strong>: pixmap, <code>None</code>(기본), <code>ParentRelative</code> 중 하나. pixmap 크기는 자유지만 크기에 따라 속도가 다를 수 있다. pixmap과 창의 깊이가 같아야 하며, 다르면 <code>BadMatch</code>.</li>
+<li><code>None</code>이면 배경이 정의되지 않는다.</li>
+<li><code>ParentRelative</code>이면 부모의 background-pixmap을 쓴다. 이때 자식과 부모의 깊이가 같아야 한다(아니면 <code>BadMatch</code>). 부모가 <code>None</code>이면 자식도 <code>None</code>. 부모 pixmap을 복사하는 것이 아니라 <strong>필요할 때마다 부모의 배경을 다시 확인</strong>한다. 타일 원점은 부모의 타일 원점에 맞춰진다(그래서 자식이 "투명하게" 보이는 효과를 낸다). <code>ParentRelative</code>가 아니면 타일 원점은 자식 창의 원점이다.</li>
+</ul>
+<p>새 배경을 지정하면(pixel이든 pixmap이든) 이전 배경을 덮어쓴다. 배경 pixmap은 더 참조하지 않으면 바로 해제해도 된다(서버가 필요한 사본을 유지한다). 그런데 <strong>배경으로 지정한 pixmap에 나중에 그림을 그리면 결과가 정의되지 않는다</strong>. 서버가 복사본을 만들었을 수도, 같은 pixmap을 그대로 쓸 수도 있기 때문이다. 배경을 바꾸고 싶으면 다시 지정한다.</p>
+<p>창의 어떤 영역에 유효한 내용이 없고 그 영역이 보이거나(또는 backing store가 유지 중이면), 서버는 배경으로 자동으로 칠한다(배경이 <code>None</code>이 아닌 경우). 배경이 <code>None</code>이면 같은 깊이의 다른 창이 남긴 이전 화면 내용이 그대로 남는다(그 내용이 부모나 부모의 하위 창에서 온 것이면). 그 밖의 경우 초기 내용은 정의되지 않는다. 어느 쪽이든 그 영역에 대한 <code>Expose</code>는 생긴다(10.9절).</p>
+<div class="tip">배경을 <code>None</code>으로 두면 창을 늘릴 때 "쓰레기"가 잠깐 보이지만, 서버가 배경을 먼저 칠하지 않아 깜빡임이 줄어든다. 직접 전체를 다시 그리는 프로그램(게임, 동영상 등)에서 일부러 쓰는 기법이다.</div>
+
+<h4>3.2.2 테두리 속성</h4>
+<p><code>InputOutput</code> 창만 테두리를 가진다. 픽셀이나 pixmap으로 지정한다.</p>
+<ul>
+<li><strong>border-pixel</strong>: 그 픽셀로 채운 크기 미정의 pixmap을 테두리로 쓴다. 지정하면 border-pixmap을 덮어쓰고 테두리의 모든 픽셀이 그 값이 된다. 범위 검사 없이 비트 수로 잘린다.</li>
+<li><strong>border-pixmap</strong>: 아무 크기의 pixmap 또는 <code>CopyFromParent</code>(기본). pixmap과 창의 깊이가 같아야 한다(아니면 <code>BadMatch</code>). <code>CopyFromParent</code>면 부모의 border-pixmap이 <em>복사</em>된다. 이후 부모의 테두리가 바뀌어도 자식은 영향을 받지 않는다. 이때도 자식과 부모 깊이가 같아야 한다.</li>
+<li>테두리 타일 원점은 항상 배경 타일 원점과 같다.</li>
+<li>테두리 pixmap도 바로 해제할 수 있으며, 나중에 그 pixmap에 그리면 결과가 정의되지 않는 점은 배경과 같다.</li>
+</ul>
+<p>창에 대한 출력은 항상 창 <em>안쪽</em>으로 잘린다. 따라서 그리기 함수는 <strong>테두리에 절대 영향을 주지 않는다</strong>.</p>
+
+<h4>3.2.3 중력(gravity) 속성</h4>
+<p>"중력"은 크기가 바뀔 때 무엇이 어느 쪽으로 붙어 있을지를 정한다. 두 종류가 있다.</p>
+<ul>
+<li><strong>bit-gravity</strong>: <code>InputOutput</code> 창의 크기가 바뀔 때 창 <em>내용(픽셀)</em>의 어느 부분을 남길지. 기본은 <code>ForgetGravity</code>.</li>
+<li><strong>win-gravity</strong>: <em>부모</em>의 크기가 바뀔 때 이 창(자식)을 어디로 옮길지. 기본은 <code>NorthWestGravity</code>.</li>
+</ul>
+<p>안쪽 너비·높이는 그대로이고 창이 움직이거나 테두리만 바뀌면 내용은 사라지지 않고 창과 함께 움직인다. 안쪽 너비나 높이가 바뀌면 bit-gravity에 따라 내용이 옮겨지거나 사라지고, win-gravity에 따라 자식들이 재배치된다. 너비·높이가 바뀌었을 때 각 중력 값의 (x, y) 기준점은 다음과 같다.</p>
+<table>
+<tr><th>중력</th><th>좌표</th></tr>
+<tr><td><code>NorthWestGravity</code></td><td>(0, 0)</td></tr>
+<tr><td><code>NorthGravity</code></td><td>(Width/2, 0)</td></tr>
+<tr><td><code>NorthEastGravity</code></td><td>(Width, 0)</td></tr>
+<tr><td><code>WestGravity</code></td><td>(0, Height/2)</td></tr>
+<tr><td><code>CenterGravity</code></td><td>(Width/2, Height/2)</td></tr>
+<tr><td><code>EastGravity</code></td><td>(Width, Height/2)</td></tr>
+<tr><td><code>SouthWestGravity</code></td><td>(0, Height)</td></tr>
+<tr><td><code>SouthGravity</code></td><td>(Width/2, Height)</td></tr>
+<tr><td><code>SouthEastGravity</code></td><td>(Width, Height)</td></tr>
+</table>
+<p>bit-gravity가 이 값 중 하나인 창의 크기가 바뀌면, 해당 좌표쌍(의 변화량)이 창 안 각 픽셀의 위치 변화가 된다. win-gravity가 이 값 중 하나인 창은, 부모 크기가 바뀌면 해당 좌표쌍이 부모 안에서 그 창의 위치 변화가 된다. 예를 들어 <code>SouthEastGravity</code>인 자식은 부모가 커지면 오른쪽 아래 모서리에 붙어 따라 움직인다. 창이 이렇게 옮겨지면 <code>GravityNotify</code> 이벤트가 생긴다(10.10.5절).</p>
+<ul>
+<li><code>StaticGravity</code>: 내용(bit-gravity)이나 원점(win-gravity)이 <strong>루트 창 원점 기준으로</strong> 움직이지 않게 한다. 크기 변경과 함께 위치가 (x, y)만큼 바뀌면 bit-gravity에서는 각 픽셀이 (&minus;x, &minus;y)만큼, win-gravity에서는 자식이 (&minus;x, &minus;y)만큼 움직인다. 그래도 너비나 높이가 바뀔 때만 효과가 있고, 창이 단순히 이동할 때는 효과가 없다.</li>
+<li><code>ForgetGravity</code>(bit-gravity 전용): 크기 변경 후 내용을 항상 버린다. backing store나 save under를 요청했어도 마찬가지다. 창은 배경으로 칠해지고 0개 이상의 <code>Expose</code>가 생긴다. 배경이 정의돼 있지 않으면 화면 내용은 그대로 둔다. 일부 서버는 지정한 bit-gravity를 무시하고 항상 <code>Expose</code>를 보낼 수 있다.</li>
+<li>하위 창의 내용과 테두리는 부모의 bit-gravity에 영향을 받지 않는다. 서버는 지정한 bit-gravity 대신 <code>Forget</code>을 써도 된다.</li>
+<li><code>UnmapGravity</code>(win-gravity 전용): <code>NorthWestGravity</code>처럼 창을 옮기지 않지만, 부모 크기가 바뀌면 자식을 unmap하고 <code>UnmapNotify</code>를 보낸다.</li>
+</ul>
+<div class="tip">bit-gravity는 어디까지나 "힌트"다. 서버가 <code>ForgetGravity</code>처럼 굴 수 있으므로, bit-gravity를 설정했더라도 <code>Expose</code>를 받으면 다시 그릴 수 있게 짜야 한다.</div>
+
+<h4>3.2.4 Backing store 속성</h4>
+<p>일부 X 서버는 <code>InputOutput</code> 창의 내용을 대신 보관해 줄 수 있다. 서버가 화면 밖에 보관한 픽셀을 <strong>backing store</strong>라고 한다. backing-store 속성은 서버에게 주는 <em>조언</em>이며 값은 셋이다.</p>
+<ul>
+<li><code>NotUseful</code>(기본): 내용 보관이 필요 없다. 그래도 일부 서버는 보관할 수 있고, 그러면 <code>Expose</code>가 오지 않을 수 있다.</li>
+<li><code>WhenMapped</code>: map된 동안 가려진 영역의 내용을 보관하면 좋겠다. 이 경우 서버는 창을 만들 때 <code>Expose</code>를 보낼 수도 있다.</li>
+<li><code>Always</code>: unmap된 동안에도 보관하면 좋겠다. 창이 부모보다 커도 부모 경계 안쪽만이 아니라 전체 내용을 보관해 달라는 요청이다.</li>
+</ul>
+<p>서버가 내용을 보관하는 동안은 보통 <code>Expose</code>가 생기지 않지만, 서버는 <strong>언제든 보관을 중단할 수 있다</strong>. 가려진 영역을 보관하는 동안, 하위가 아닌 창에 가려진 영역도 그리기 요청의 대상(창이 원본이면 원본)에 포함된다. 하지만 하위 창에 가려진 영역은 포함되지 않는다.</p>
+
+<h4>3.2.5 Save under 플래그</h4>
+<p>일부 서버는 어떤 <code>InputOutput</code> 창 <em>아래에 깔린</em> 다른 창들의 내용을 보관할 수 있다. 내 창 내용을 보관하는 backing store와는 다르다. 팝업 메뉴처럼 잠깐 떴다 사라지는 창이 이것을 요청하면, 메뉴가 사라질 때 아래 창들이 다시 그릴 필요가 없어 화면이 깔끔해진다.</p>
+<p>save-under는 <code>True</code> 또는 <code>False</code>(기본). <code>True</code>면 "이 창이 map될 때 가려지는 창들의 내용을 보관해 두면 좋겠다"는 조언이 된다. 서버 지원 여부는 <code>DoesSaveUnders</code>로 확인한다.</p>
+
+<h4>3.2.6 Backing planes와 backing pixel 속성</h4>
+<p>backing-planes는 <code>InputOutput</code> 창의 어느 비트 plane이 backing store와 save under에서 보존해야 할 동적 데이터인지를 비트 1로 표시한다. 기본은 모든 비트 1. backing-pixel은 backing-planes에 포함되지 않은 plane에 쓸 비트 값이며 기본은 0이다. 서버는 지정된 plane만 저장하고 나머지는 이 픽셀 값으로 다시 만들 수 있다. 창 깊이를 넘는 여분 비트는 무시될 수 있다. backing store나 save under를 요청한다면 이 값들로 필요한 화면 밖 메모리를 줄일 수 있다. 자주 쓰지 않아 요약만 한다.</p>
+
+<h4>3.2.7 이벤트 마스크와 do-not-propagate 마스크</h4>
+<p><strong>event-mask</strong>는 이 창(일부 이벤트는 하위 창 포함)에서 클라이언트가 어떤 이벤트를 받고 싶은지 정한다. 유효한 이벤트 마스크 비트를 OR한 값이다. 기본은 <code>NoEventMask</code>(아무것도 받지 않음). 그래서 <strong>마스크를 설정하지 않으면 이벤트가 하나도 오지 않는다</strong>. 보통은 <code>XSelectInput</code>(10장)으로 설정하지만, <code>CWEventMask</code>로 창을 만들 때 함께 줄 수도 있다.</p>
+<p><strong>do-not-propagate-mask</strong>는 이 창에서 그 이벤트를 선택한 클라이언트가 없을 때, 어떤 이벤트를 조상 창으로 <em>전파하지 않을지</em> 정한다. 지정할 수 있는 마스크는 <code>KeyPress</code>, <code>KeyRelease</code>, <code>ButtonPress</code>, <code>ButtonRelease</code>, <code>PointerMotion</code>, <code>Button1Motion</code>~<code>Button5Motion</code>, <code>ButtonMotion</code>(실제 상수 이름은 <code>KeyPressMask</code> 등)이다. 기본 <code>NoEventMask</code>는 모두 전파한다는 뜻이다.</p>
+<p>배경 설명: X에서 키·버튼·포인터 이벤트는 포인터 아래의 가장 깊은 창에서 시작해, 그 창에서 아무도 관심이 없으면 부모 쪽으로 올라간다(전파). 그래서 부모 창 하나에서 여러 자식 창의 클릭을 한꺼번에 받을 수 있다.</p>
+
+<h4>3.2.8 Override-redirect 플래그</h4>
+<p>창 관리자는 창 배치를 제어하거나 장식(제목 표시줄 등)을 붙이기 위해 map·configure 요청을 가로채야(redirect) 한다. 하지만 팝업 메뉴는 창 관리자의 간섭 없이 바로 떠야 한다. override-redirect 플래그는 이 창에 대한 map·configure 요청이 부모의 <code>SubstructureRedirectMask</code>를 무시하고 바로 실행될지 정한다. 값은 <code>True</code> 또는 <code>False</code>(기본). 창 관리자는 이 값을 보고 팝업 창을 건드리지 않는다(14장).</p>
+<div class="tip">일반 응용 창에 override-redirect를 <code>True</code>로 주면 제목 표시줄도 없고 이동도 안 되고 키보드 포커스도 제대로 안 받는 창이 된다. 메뉴, 툴팁, 드롭다운처럼 짧게 뜨는 창에만 쓴다.</div>
+
+<h4>3.2.9 컬러맵 속성</h4>
+<p>colormap 속성은 <code>InputOutput</code> 창의 색을 가장 잘 나타내는 컬러맵을 정한다. 컬러맵은 창과 같은 비주얼 타입이어야 하며, 아니면 <code>BadMatch</code>. 여러 하드웨어 컬러맵을 지원하는 서버는 이 정보를 쓸 수 있고, 창 관리자는 이것으로 <code>XInstallColormap</code>을 부른다. 값은 컬러맵 또는 <code>CopyFromParent</code>(기본).</p>
+<p><code>CopyFromParent</code>면 부모의 컬러맵을 자식이 쓴다. 이때 자식과 부모의 비주얼이 같아야 하고, 부모의 컬러맵이 <code>None</code>이면 안 된다(둘 다 위반 시 <code>BadMatch</code>). 컬러맵 내용을 통째로 복사하는 것이 아니라 <strong>같은 컬러맵 객체를 공유</strong>한다. 그 뒤 부모의 colormap 속성을 바꿔도 자식은 영향받지 않는다.</p>
+<div class="tip">기본이 아닌 비주얼(예: 32비트 ARGB)로 창을 만들 때는 그 비주얼로 만든 컬러맵(<code>XCreateColormap</code>)을 <code>CWColormap</code>으로 반드시 지정한다. 부모(루트)와 비주얼이 다른데 <code>CopyFromParent</code>가 되면 <code>BadMatch</code>가 난다.</div>
+
+<h4>3.2.10 커서 속성</h4>
+<p>cursor 속성은 포인터가 이 창(<code>InputOutput</code>이나 <code>InputOnly</code>) 안에 있을 때 쓸 커서를 정한다. 값은 커서 또는 <code>None</code>(기본). <code>None</code>이면 부모의 커서를 쓰며, 부모의 커서가 바뀌면 표시되는 커서도 바로 바뀐다. 더 참조하지 않는다면 <code>XFreeCursor</code>로 커서를 바로 해제해도 된다.</p>
+
+<h3>3.3 창 만들기</h3>
+<p>Xlib은 창을 만드는 기본 함수를 제공하고, 툴킷은 최상위 창을 만들고 배치하는 상위 함수를 따로 제공한다. 툴킷 없이 Xlib만 쓴다면 클라이언트 간 통신 함수(14장)로 창 관리자에게 필요한 정보(힌트)를 직접 알려야 한다.</p>
+<h4>최상위 창을 만들 때 지킬 규칙</h4>
+<p>루트의 직속 자식, 즉 최상위 창을 Xlib으로 직접 만든다면 여러 창 관리 방식과 잘 어울리기 위해 다음을 지킨다.</p>
+<ul>
+<li>최상위 창의 크기나 위치를 두고 창 관리자와 <strong>싸우지 않는다</strong>.</li>
+<li>어떤 크기의 창을 받든 처리할 수 있어야 한다. 정 안 되면 창에 "창을 더 키워 주세요" 같은 메시지만 띄워도 된다.</li>
+<li>최상위 창의 크기·위치 변경은 사용자 요청에 직접 응답할 때만 시도한다. 요청이 받아들여지지 않으면 받은 대로 산다. 최상위 창의 <em>자식</em>은 필요한 대로 자유롭게 옮기고 크기를 바꿔도 된다.</li>
+<li>표준 창 속성(property)을 자동으로 설정해 주는 툴킷을 쓰지 않는다면, map하기 <strong>전에</strong> 최상위 창의 그 속성들을 설정한다(14장, ICCCM).</li>
+</ul>
+<p><code>XCreateWindow</code>는 창을 만들면서 속성을 원하는 대로 지정할 수 있는 일반 함수이고, <code>XCreateSimpleWindow</code>는 부모로부터 속성을 물려받는 간단한 함수다.</p>
+<p>서버는 그리기 요청, exposure 처리, <code>VisibilityNotify</code> 이벤트에 대해서는 <code>InputOnly</code> 창이 없는 것처럼 행동한다. <code>InputOnly</code> 창은 drawable로 쓸 수 없다. 그 밖의 면(속성, grab, 입력 제어 등)에서는 두 클래스가 똑같이 동작한다. 확장(extension)은 다른 창 클래스를 정의할 수도 있다.</p>
+
+<h4>XCreateWindow</h4>
+<pre><code>Window XCreateWindow(Display *display, Window parent,
+                     int x, int y, unsigned int width, unsigned int height,
+                     unsigned int border_width, int depth, unsigned int class,
+                     Visual *visual, unsigned long valuemask,
+                     XSetWindowAttributes *attributes);</code></pre>
+<p><strong>목적</strong>: 부모 창 아래에 unmap 상태의 창을 만들고 속성을 지정한다. 창 ID를 돌려주고 <code>CreateNotify</code> 이벤트를 발생시킨다. 새 창은 형제들 중 쌓기 순서 맨 위에 놓인다.</p>
+<table>
+<tr><th>인자</th><th>뜻</th></tr>
+<tr><td><code>parent</code></td><td>부모 창. 최상위 창이면 <code>RootWindow(dpy, screen)</code>.</td></tr>
+<tr><td><code>x</code>, <code>y</code></td><td>새 창 <strong>테두리 바깥</strong> 왼쪽 위 모서리의 위치. 부모 테두리 안쪽 기준.</td></tr>
+<tr><td><code>width</code>, <code>height</code></td><td>새 창의 <strong>안쪽</strong> 크기(테두리 미포함). 0이면 <code>BadValue</code>.</td></tr>
+<tr><td><code>border_width</code></td><td>테두리 두께(픽셀). <code>InputOnly</code>면 반드시 0(아니면 <code>BadMatch</code>).</td></tr>
+<tr><td><code>depth</code></td><td>창 깊이. <code>CopyFromParent</code>면 부모에서 가져온다.</td></tr>
+<tr><td><code>class</code></td><td><code>InputOutput</code>, <code>InputOnly</code>, <code>CopyFromParent</code>.</td></tr>
+<tr><td><code>visual</code></td><td>비주얼. <code>CopyFromParent</code>면 부모에서 가져온다.</td></tr>
+<tr><td><code>valuemask</code></td><td><code>attributes</code>에서 어떤 멤버를 쓸지(속성 마스크 비트의 OR). 0이면 <code>attributes</code>를 아예 참조하지 않는다.</td></tr>
+<tr><td><code>attributes</code></td><td>값을 담은 <code>XSetWindowAttributes</code>.</td></tr>
+</table>
+<p>좌표계는 앞에서 말한 대로 왼쪽 위가 원점이고, 창의 원점은 테두리 안쪽 왼쪽 위다. 따라서 "창의 (x, y)"는 테두리 바깥 기준이지만, 창 안에서 그릴 때 (0, 0)은 테두리 안쪽이다.</p>
+<p>제약 조건(위반하면 <code>BadMatch</code>):</p>
+<ul>
+<li><code>InputOutput</code>: 비주얼과 깊이의 조합이 그 스크린에서 지원돼야 한다. 깊이는 부모와 달라도 되지만, 부모가 <code>InputOnly</code>면 안 된다.</li>
+<li><code>InputOnly</code>: 깊이는 0, 비주얼은 스크린이 지원하는 것이어야 한다. 부모는 아무 깊이·클래스라도 된다.</li>
+<li>창에 맞지 않는 속성을 지정하면 <code>BadMatch</code>.</li>
+</ul>
+<p>만든 창은 아직 화면에 보이지 않는다. <code>XMapWindow</code>로 띄운다. 새 창은 처음에 부모와 같은 커서를 쓰며, <code>XDefineCursor</code>로 바꿀 수 있다. 창 자신과 <strong>모든 조상</strong>이 map돼 있고 조상에 가려지지 않아야 화면에 보인다.</p>
+<p>낼 수 있는 오류: <code>BadAlloc</code>, <code>BadColor</code>, <code>BadCursor</code>, <code>BadMatch</code>, <code>BadPixmap</code>, <code>BadValue</code>, <code>BadWindow</code>.</p>
+
+<h4>XCreateSimpleWindow</h4>
+<pre><code>Window XCreateSimpleWindow(Display *display, Window parent,
+                           int x, int y, unsigned int width, unsigned int height,
+                           unsigned int border_width,
+                           unsigned long border, unsigned long background);</code></pre>
+<p><strong>목적</strong>: 부모 아래에 unmap 상태의 <code>InputOutput</code> 창을 간단히 만든다. 창 ID를 돌려주고 <code>CreateNotify</code>를 발생시키며, 형제 중 맨 위에 놓인다. 부모 밖으로 나간 부분은 잘린다.</p>
+<ul>
+<li><code>border</code>: 테두리 픽셀 값, <code>background</code>: 배경 픽셀 값. 나머지 인자는 <code>XCreateWindow</code>와 같다.</li>
+<li>깊이·클래스·비주얼은 부모에게서 물려받는다. 배경과 테두리를 뺀 다른 속성은 모두 기본값이다(이벤트 마스크도 비어 있으므로 따로 <code>XSelectInput</code>이 필요하다).</li>
+<li>오류: <code>BadAlloc</code>, <code>BadMatch</code>, <code>BadValue</code>, <code>BadWindow</code>.</li>
+</ul>
+
+<pre><code>/* XCreateWindow로 속성을 직접 지정하는 예 */
+#include &lt;X11/Xlib.h&gt;
+
+Window make_window(Display *dpy, int screen)
+{
+    XSetWindowAttributes attr;
+    unsigned long mask;
+
+    attr.background_pixel = WhitePixel(dpy, screen);
+    attr.border_pixel     = BlackPixel(dpy, screen);
+    attr.bit_gravity      = NorthWestGravity;   /* 늘릴 때 기존 내용 유지(힌트) */
+    attr.event_mask       = ExposureMask | KeyPressMask
+                          | ButtonPressMask | StructureNotifyMask;
+    mask = CWBackPixel | CWBorderPixel | CWBitGravity | CWEventMask;
+
+    return XCreateWindow(dpy, RootWindow(dpy, screen),
+                         0, 0, 400, 300, 2,
+                         CopyFromParent,        /* depth  */
+                         InputOutput,           /* class  */
+                         CopyFromParent,        /* visual */
+                         mask, &amp;attr);
+}</code></pre>
+<div class="tip">
+<ul>
+<li>마스크 비트를 빼먹으면 구조체에 값을 넣어도 무시된다. 반대로 비트를 켰는데 멤버를 초기화하지 않으면 쓰레기 값이 서버로 간다. 채운 멤버와 마스크를 항상 함께 맞춘다.</li>
+<li><code>CopyFromParent</code>는 <code>visual</code>(포인터 타입) 자리에 넘길 때 경고가 날 수 있다. 필요하면 <code>(Visual *)CopyFromParent</code>로 캐스트한다.</li>
+<li>최상위 창의 x, y는 창 관리자가 대부분 무시한다. 위치를 정말 원하면 14장의 크기 힌트(<code>WM_NORMAL_HINTS</code>)를 쓴다.</li>
+</ul>
+</div>
+
+<h3>3.4 창 없애기</h3>
+<pre><code>XDestroyWindow(Display *display, Window w);</code></pre>
+<p><strong>목적</strong>: 창과 그 모든 하위 창을 파괴한다. 각 창마다 <code>DestroyNotify</code> 이벤트가 생긴다. 이후 그 창을 다시 참조하면 안 된다.</p>
+<ul>
+<li>창이 map돼 있으면 자동으로 unmap된다.</li>
+<li><code>DestroyNotify</code> 순서: 어떤 창이든 그 하위 창들이 먼저, 그 창 자신이 나중이다. 형제끼리나 다른 하위 트리 사이의 순서는 정해져 있지 않다.</li>
+<li>루트 창을 지정하면 아무 창도 파괴되지 않는다.</li>
+<li>map된 창을 파괴하면 그 창에 가려져 있던 다른 창들에 <code>Expose</code>가 생긴다.</li>
+<li>오류: <code>BadWindow</code>.</li>
+</ul>
+
+<pre><code>XDestroySubwindows(Display *display, Window w);</code></pre>
+<p><strong>목적</strong>: 지정한 창의 모든 하위 창을 아래에서 위 쌓기 순서로 파괴한다(창 자신은 남는다). 각 창마다 <code>DestroyNotify</code>가 생기고, map된 하위 창이 실제로 파괴됐다면 지정한 창에 <code>Expose</code>가 생긴다. 서버가 많은 작업을 한 번에 처리하므로 하나씩 지우는 것보다 훨씬 효율적이다. 오류: <code>BadWindow</code>.</p>
+<div class="tip">창을 파괴한 뒤에도 큐에는 그 창에 대한 이벤트가 남아 있을 수 있다. 이벤트의 <code>window</code> 값으로 내 자료 구조를 찾을 때, 이미 지운 창이면 무시하도록 처리한다.</div>
+
+<h3>3.5 창 띄우기(map)</h3>
+<p><code>XMapWindow</code>를 부른 창을 "map됐다"고 한다. 그래도 다음 이유로 화면에 보이지 않을 수 있다.</p>
+<ul>
+<li>다른 불투명한 창에 가려졌다.</li>
+<li>조상 중 하나가 map되지 않았다.</li>
+<li>조상에 의해 완전히 잘렸다.</li>
+</ul>
+<p>창의 일부나 전체가 화면에 보이게 되면 <code>Expose</code>가 생기지만, 클라이언트가 요청한 경우에만 받는다. 창은 unmap돼도 쌓기 순서상 자리를 유지한다.</p>
+<h4>창 관리자의 가로채기(redirect)</h4>
+<p>창 관리자는 하위 창의 배치를 제어하고 싶어 한다. 창 관리자가 어떤 부모 창(보통 루트)에 <code>SubstructureRedirectMask</code>를 선택해 두면, 다른 클라이언트가 그 자식에 대해 보낸 map 요청은 실행되지 않고 창 관리자에게 <code>MapRequest</code> 이벤트가 간다. 다만 그 자식의 override-redirect가 <code>True</code>(보통 팝업 메뉴)면 map은 그대로 실행된다.</p>
+<p>타일링 창 관리자는 다른 클라이언트의 창들을 재배치한 뒤 최종 위치에 map할 수 있고, 장식을 주는 창 관리자는 먼저 자식을 프레임 안으로 reparent할 수 있다(3.2.8절, 10.10절). <code>SubstructureRedirectMask</code>는 한 번에 한 클라이언트만 선택할 수 있다. 마찬가지로 한 클라이언트가 부모 창에 <code>ResizeRedirectMask</code>를 선택할 수 있으며, 그러면 다른 클라이언트의 크기 변경 시도는 막히고 그 클라이언트가 <code>ResizeRequest</code>를 받는다.</p>
+<p>이 때문에 일반 응용 입장에서는 <strong><code>XMapWindow</code>를 불러도 즉시 map되지 않는다</strong>. 창 관리자가 <code>MapRequest</code>를 받아 처리한 뒤에야 실제로 map된다. 그래서 그리기는 <code>Expose</code>를 기다렸다가 한다.</p>
+
+<h4>XMapWindow</h4>
+<pre><code>XMapWindow(Display *display, Window w);</code></pre>
+<p><strong>목적</strong>: 창과, map 요청을 받은 적이 있는 그 모든 하위 창을 map한다.</p>
+<ul>
+<li>조상 중 map 안 된 것이 있으면 화면에 나오지 않고 "조상이 map되면 보일 수 있음"으로 표시만 된다. 이런 창을 <strong>unviewable</strong>이라 한다. 모든 조상이 map되면 <strong>viewable</strong>이 되고, 다른 창에 가려지지 않으면 화면에 보인다.</li>
+<li>이미 map된 창이면 아무 효과가 없다.</li>
+<li>override-redirect가 <code>False</code>이고 다른 클라이언트가 부모에 <code>SubstructureRedirectMask</code>를 선택했다면, <code>MapRequest</code>만 생기고 map은 되지 않는다. 그렇지 않으면 map되고 <code>MapNotify</code>가 생긴다.</li>
+<li>창이 viewable이 됐는데 기억된 이전 내용이 없으면 서버가 배경으로 칠한다. 배경이 정의되지 않았으면 화면을 바꾸지 않고 0개 이상의 <code>Expose</code>를 만든다. unmap된 동안 backing store가 유지됐다면 <code>Expose</code>는 생기지 않는다. 이제부터 backing store가 유지된다면 창 전체에 대한 exposure가 항상 생긴다. 그 밖에는 보이는 영역만 보고될 수 있다. 새로 viewable이 된 하위 창에도 같은 처리가 일어난다.</li>
+<li><code>InputOutput</code> 창이면, 이로 인해 화면에 나타나는 각 <code>InputOutput</code> 창에 <code>Expose</code>가 생긴다.</li>
+<li>오류: <code>BadWindow</code>.</li>
+</ul>
+<p>원문이 권하는 순서가 있다. 클라이언트가 map한 뒤 바로 그리고, 이어서 이벤트 처리를 시작하면 창이 <strong>두 번 그려진다</strong>(한 번은 직접, 한 번은 <code>Expose</code> 때문에). 이를 피하려면 <strong>먼저 <code>Expose</code>를 선택하고, 그다음 map한 뒤, 평소처럼 이벤트를 처리</strong>한다. 화면에 나타난 각 창에 대한 <code>Expose</code>가 이벤트 목록에 들어 있을 것이고, <code>Expose</code>를 받으면 다시 그리는 것이 정상적인 반응이다. 이렇게 하면 프로그램이 단순해지고 창 관리자와도 잘 맞는다.</p>
+<pre><code>XSelectInput(dpy, win, ExposureMask | KeyPressMask);  /* 1. 먼저 관심 이벤트 선택 */
+XMapWindow(dpy, win);                                 /* 2. map */
+for (;;) {                                            /* 3. 이벤트 처리 */
+    XEvent ev;
+    XNextEvent(dpy, &amp;ev);
+    if (ev.type == Expose &amp;&amp; ev.xexpose.count == 0)
+        redraw(dpy, win);                             /* 그리기는 여기서만 */
+}</code></pre>
+
+<pre><code>XMapRaised(Display *display, Window w);</code></pre>
+<p><strong>목적</strong>: <code>XMapWindow</code>처럼 창과 map 요청을 받은 하위 창을 map하고, 추가로 그 창을 쌓기 순서 맨 위로 올린다. 오류: 여러 개의 <code>BadWindow</code>가 날 수 있다.</p>
+
+<pre><code>XMapSubwindows(Display *display, Window w);</code></pre>
+<p><strong>목적</strong>: 지정한 창의 모든 하위 창을 위에서 아래 쌓기 순서로 map한다. 새로 화면에 나타난 각 창에 <code>Expose</code>가 생긴다. 서버가 작업 대부분을 한 번에 처리하므로 하나씩 map하는 것보다 훨씬 효율적일 수 있다. 오류: <code>BadWindow</code>.</p>
+<div class="tip">자식 창을 많이 만드는 프로그램은 자식들을 만든 뒤 <code>XMapSubwindows(dpy, top)</code>로 한꺼번에 map하고, 마지막에 최상위 창을 <code>XMapWindow</code>한다. 최상위 창을 먼저 띄우면 자식이 하나씩 나타나는 모습이 보이고 Expose도 더 많이 생긴다.</div>
+
+<h3>3.6 창 내리기(unmap)</h3>
+<pre><code>XUnmapWindow(Display *display, Window w);</code></pre>
+<p><strong>목적</strong>: 창을 unmap하고 <code>UnmapNotify</code>를 발생시킨다. 이미 unmap돼 있으면 효과가 없다.</p>
+<ul>
+<li>이전에 가려졌던 창들에 대해 보통의 exposure 처리가 일어난다(그 창들에 <code>Expose</code>가 생긴다).</li>
+<li>자식 창은 부모가 다시 map될 때까지 보이지 않는다. 즉 자식들은 여전히 "map됨" 상태지만 부모가 map되기 전까지 보이지 않는다. 그래서 부모를 다시 map하면 자식들도 함께 나타난다.</li>
+<li>오류: <code>BadWindow</code>.</li>
+</ul>
+<pre><code>XUnmapSubwindows(Display *display, Window w);</code></pre>
+<p><strong>목적</strong>: 지정한 창의 모든 하위 창을 아래에서 위 쌓기 순서로 unmap한다. 각 하위 창에 <code>UnmapNotify</code>, 이전에 가려졌던 창들에 <code>Expose</code>가 생긴다. 하나씩 하는 것보다 훨씬 효율적이다. 오류: <code>BadWindow</code>.</p>
+
+<h3>3.7 창 설정 바꾸기(configure)</h3>
+<p>창을 옮기거나, 크기를 바꾸거나, 둘 다 하거나, 테두리 두께를 바꾸는 함수들이다. 일반형은 <code>XConfigureWindow</code>이며, 여기서도 "구조체 + 값 마스크" 패턴을 쓴다.</p>
+<pre><code>/* Configure window value mask bits */
+#define CWX           (1&lt;&lt;0)
+#define CWY           (1&lt;&lt;1)
+#define CWWidth       (1&lt;&lt;2)
+#define CWHeight      (1&lt;&lt;3)
+#define CWBorderWidth (1&lt;&lt;4)
+#define CWSibling     (1&lt;&lt;5)
+#define CWStackMode   (1&lt;&lt;6)
+
+typedef struct {
+    int x, y;
+    int width, height;
+    int border_width;
+    Window sibling;
+    int stack_mode;
+} XWindowChanges;</code></pre>
+<ul>
+<li><code>x</code>, <code>y</code>: 부모 원점 기준, 창 바깥 왼쪽 위 모서리의 위치.</li>
+<li><code>width</code>, <code>height</code>: 테두리를 뺀 안쪽 크기. 0이면 <code>BadValue</code>.</li>
+<li><code>border_width</code>: 테두리 두께. 테두리 두께만 바꾸면 바깥 왼쪽 위 모서리는 고정되고 창 원점의 절대 위치가 움직인다. <code>InputOnly</code> 창에 0이 아닌 값을 주면 <code>BadMatch</code>.</li>
+<li><code>sibling</code>: 쌓기 작업의 기준이 될 형제 창.</li>
+<li><code>stack_mode</code>: <code>Above</code>, <code>Below</code>, <code>TopIf</code>, <code>BottomIf</code>, <code>Opposite</code> 중 하나.</li>
+</ul>
+<p>루트 창을 configure하려는 시도는 효과가 없다.</p>
+
+<h4>요청이 가로채지는 경우</h4>
+<ul>
+<li>창의 override-redirect가 <code>False</code>이고 다른 클라이언트가 부모에 <code>SubstructureRedirectMask</code>를 선택했으면, <code>ConfigureRequest</code> 이벤트만 생기고 더 이상 처리되지 않는다. (최상위 창의 이동·크기 변경은 대부분 이렇게 창 관리자에게 넘어간다.)</li>
+<li>그렇지 않고, 다른 클라이언트가 이 창에 <code>ResizeRedirectMask</code>를 선택했고 안쪽 너비나 높이가 바뀌는 중이면, <code>ResizeRequest</code>가 생기고 크기는 현재 값이 그대로 쓰인다(위치 등 나머지는 처리된다).</li>
+<li>override-redirect는 <code>ResizeRedirectMask</code>에 영향을 주지 않으며, 부모의 <code>SubstructureRedirectMask</code>가 창의 <code>ResizeRedirectMask</code>보다 우선한다.</li>
+</ul>
+<h4>실제로 바뀌었을 때</h4>
+<ul>
+<li>지정한 대로 기하(geometry)가 바뀌면 창이 형제 사이에서 다시 쌓이고, 상태가 실제로 바뀐 경우 <code>ConfigureNotify</code>가 생긴다. <code>GravityNotify</code>는 <code>ConfigureNotify</code> 다음에 온다.</li>
+<li>크기가 실제로 바뀌면 하위 창은 각자의 win-gravity에 따라 움직이고, 창 내용은 bit-gravity에 따라 옮겨질 수 있다(3.2.3절).</li>
+<li>가려졌던 영역이 드러나면 그 창과 하위 창들에 exposure 처리가 일어난다. 너비·높이가 커지면 새 영역과 내용이 사라진 영역에도 exposure 처리가 일어난다.</li>
+</ul>
+<h4>쌓기 모드 규칙</h4>
+<p><code>BottomIf</code>, <code>TopIf</code>, <code>Opposite</code>의 판단은 처음 위치가 아니라 <strong>요청의 다른 인자로 정해진 최종 크기와 위치</strong>를 기준으로 한다. sibling만 주고 stack_mode를 주지 않으면 <code>BadMatch</code>.</p>
+<table>
+<tr><th>stack_mode</th><th>sibling을 준 경우</th><th>sibling을 안 준 경우</th></tr>
+<tr><td><code>Above</code></td><td>sibling 바로 위에 놓는다.</td><td>맨 위에 놓는다.</td></tr>
+<tr><td><code>Below</code></td><td>sibling 바로 아래에 놓는다.</td><td>맨 아래에 놓는다.</td></tr>
+<tr><td><code>TopIf</code></td><td>sibling이 이 창을 가리면 맨 위로.</td><td>어떤 형제든 이 창을 가리면 맨 위로.</td></tr>
+<tr><td><code>BottomIf</code></td><td>이 창이 sibling을 가리면 맨 아래로.</td><td>이 창이 어떤 형제든 가리면 맨 아래로.</td></tr>
+<tr><td><code>Opposite</code></td><td>sibling이 이 창을 가리면 맨 위로, 이 창이 sibling을 가리면 맨 아래로.</td><td>어떤 형제가 가리면 맨 위로, 이 창이 어떤 형제를 가리면 맨 아래로.</td></tr>
+</table>
+
+<h4>XConfigureWindow</h4>
+<pre><code>XConfigureWindow(Display *display, Window w, unsigned int value_mask,
+                 XWindowChanges *values);</code></pre>
+<p><strong>목적</strong>: <code>values</code>로 창의 크기, 위치, 테두리, 쌓기 순서를 한 번에 바꾼다. 마스크에 없는 값은 창의 현재 값을 그대로 쓴다.</p>
+<ul>
+<li>sibling을 줬는데 stack_mode가 없거나, 그 창이 실제로 형제가 아니면 <code>BadMatch</code>.</li>
+<li>창, 하위 창, 새로 보이게 된 창들의 backing store 내용은 구현에 따라 버려지거나 현재 화면 내용으로 바뀐다.</li>
+<li>오류: <code>BadMatch</code>, <code>BadValue</code>, <code>BadWindow</code>.</li>
+</ul>
+<pre><code>/* 자식 창 child를 (10,10)으로 옮기고 200x100으로 바꾼 뒤 형제 other 바로 아래에 놓는다 */
+XWindowChanges ch;
+ch.x = 10;  ch.y = 10;
+ch.width = 200;  ch.height = 100;
+ch.sibling = other;
+ch.stack_mode = Below;
+XConfigureWindow(dpy, child,
+                 CWX | CWY | CWWidth | CWHeight | CWSibling | CWStackMode,
+                 &amp;ch);</code></pre>
+
+<h4>편의 함수</h4>
+<pre><code>XMoveWindow(Display *display, Window w, int x, int y);</code></pre>
+<p><strong>목적</strong>: 크기는 그대로 두고 창을 옮긴다. x, y는 테두리(없으면 창 자신)의 왼쪽 위 픽셀이 갈 새 위치다. 크기 변경, 올리기, map 상태 변경은 하지 않는다. map된 창을 옮기면, 하위가 아닌 창에 가려져 있었고 backing store가 없으면 내용이 사라질 수 있고 그때 <code>Expose</code>가 생긴다. 이전에 가려졌던 창들에도 <code>Expose</code>가 생긴다. redirect 규칙은 위와 같다(<code>ConfigureRequest</code>). 오류: <code>BadWindow</code>.</p>
+
+<pre><code>XResizeWindow(Display *display, Window w, unsigned int width, unsigned int height);</code></pre>
+<p><strong>목적</strong>: 왼쪽 위 좌표는 그대로 두고 안쪽 크기(테두리 제외)를 바꾼다. 원점을 바꾸거나 다시 쌓지 않는다. map된 창의 크기를 바꾸면 내용이 사라지고 <code>Expose</code>가 생길 수 있다. 작게 만들면 그 창이 가렸던 창들에 <code>Expose</code>가 생긴다. width나 height가 0이면 <code>BadValue</code>. redirect 규칙은 같다. 오류: <code>BadValue</code>, <code>BadWindow</code>.</p>
+
+<pre><code>XMoveResizeWindow(Display *display, Window w, int x, int y,
+                  unsigned int width, unsigned int height);</code></pre>
+<p><strong>목적</strong>: 올리지 않고 위치(부모 기준)와 안쪽 크기를 함께 바꾼다. 그 창이나 이전에 가려졌던 창에 <code>Expose</code>가 생길 수 있다. 이동과 크기 변경을 따로 부르면 중간 상태가 보이고 이벤트도 두 번 생기므로, 둘 다 바꿀 때는 이것을 쓴다. 오류: <code>BadValue</code>, <code>BadWindow</code>.</p>
+
+<pre><code>XSetWindowBorderWidth(Display *display, Window w, unsigned int width);</code></pre>
+<p><strong>목적</strong>: 테두리 두께를 바꾼다. 오류: <code>BadWindow</code>.</p>
+
+<div class="tip">
+<ul>
+<li>최상위 창에 <code>XMoveWindow</code>/<code>XResizeWindow</code>를 불러도 창 관리자가 가로채므로, 함수가 돌아온 직후 창이 바뀌었다고 가정하면 안 된다. 실제 결과는 <code>StructureNotifyMask</code>를 선택해 두고 <code>ConfigureNotify</code> 이벤트로 확인한다.</li>
+<li>창 관리자가 프레임으로 reparent하면 <code>ConfigureNotify</code>의 x, y는 프레임 기준일 수 있다. 화면상 위치가 필요하면 <code>XTranslateCoordinates</code>(4장)를 쓴다.</li>
+</ul>
+</div>
+
+<h3>3.8 쌓기 순서 바꾸기</h3>
+<p>형제 창 사이의 위아래 순서를 바꾸는 함수들이다. 창들을 책상 위에 겹쳐 놓은 종이로 생각하면 된다.</p>
+
+<pre><code>XRaiseWindow(Display *display, Window w);</code></pre>
+<p><strong>목적</strong>: 창을 쌓기 순서 맨 위로 올려 어떤 형제에도 가려지지 않게 한다. 종이 한 장을 맨 위로 옮기되 책상 위의 x, y 위치는 그대로인 것과 같다. map된 창을 올리면 그 창과 이전에 가려졌던 map된 하위 창에 <code>Expose</code>가 생길 수 있다. override-redirect가 <code>False</code>이고 다른 클라이언트가 부모에 <code>SubstructureRedirectMask</code>를 선택했으면 <code>ConfigureRequest</code>만 생기고 처리되지 않는다. 오류: <code>BadWindow</code>.</p>
+
+<pre><code>XLowerWindow(Display *display, Window w);</code></pre>
+<p><strong>목적</strong>: 창을 맨 아래로 내려 어떤 형제도 가리지 않게 한다. map된 창을 내리면 그 창이 가렸던 창들에 <code>Expose</code>가 생긴다. redirect 규칙은 <code>XRaiseWindow</code>와 같다. 오류: <code>BadWindow</code>.</p>
+
+<pre><code>XCirculateSubwindows(Display *display, Window w, int direction);</code></pre>
+<p><strong>목적</strong>: 지정한 창의 <em>자식들</em>을 한 방향으로 돌린다.</p>
+<ul>
+<li><code>direction</code>이 <code>RaiseLowest</code>면 다른 자식에 가려진 map된 자식 중 가장 아래 것을 맨 위로 올린다.</li>
+<li><code>LowerHighest</code>면 다른 자식을 가리는 map된 자식 중 가장 위 것을 맨 아래로 내린다.</li>
+<li>그 뒤 이전에 가려졌던 창들에 exposure 처리가 일어난다.</li>
+<li>다른 클라이언트가 이 창에 <code>SubstructureRedirectMask</code>를 선택했으면 <code>CirculateRequest</code>만 생기고 처리되지 않는다. 자식이 실제로 다시 쌓이면 <code>CirculateNotify</code>가 생긴다.</li>
+<li>오류: <code>BadValue</code>, <code>BadWindow</code>.</li>
+</ul>
+<pre><code>XCirculateSubwindowsUp(Display *display, Window w);    /* = XCirculateSubwindows(.., RaiseLowest) */
+XCirculateSubwindowsDown(Display *display, Window w);  /* = XCirculateSubwindows(.., LowerHighest) */</code></pre>
+<p><strong>목적</strong>: 위 함수의 편의판이다. <code>Up</code>은 부분 또는 완전히 가려진 map된 자식 중 가장 아래 것을 올리고, <code>Down</code>은 다른 자식을 부분 또는 완전히 가리는 map된 자식 중 가장 위 것을 내린다. 전혀 가려지지 않은(가리지 않는) 자식은 영향받지 않는다. 오류: <code>BadWindow</code>.</p>
+
+<pre><code>XRestackWindows(Display *display, Window windows[], int nwindows);</code></pre>
+<p><strong>목적</strong>: 여러 창을 배열 순서대로(위에서 아래로) 다시 쌓는다.</p>
+<ul>
+<li>배열 첫 창의 쌓기 위치는 바뀌지 않고, 나머지 창들이 배열 순서대로 그 아래에 차례로 놓인다. 배열에 없는 창들의 순서는 바뀌지 않는다.</li>
+<li>배열의 창들은 모두 같은 부모의 자식이어야 하며, 아니면 그런 창마다 <code>BadMatch</code>가 난다.</li>
+<li>override-redirect가 <code>False</code>이고 다른 클라이언트가 부모에 <code>SubstructureRedirectMask</code>를 선택했으면, override-redirect가 설정되지 않은 각 창에 대해 <code>ConfigureRequest</code>가 생기고 더 이상 처리되지 않는다.</li>
+<li>오류: <code>BadWindow</code>.</li>
+</ul>
+<pre><code>/* 세 개의 자식 창을 a, b, c 순서(a가 맨 위)로 정렬. a의 위치는 그대로, b와 c가 그 밑으로 */
+Window order[3] = { a, b, c };
+XRestackWindows(dpy, order, 3);</code></pre>
+
+<h3>3.9 창 속성 바꾸기</h3>
+<p><code>XChangeWindowAttributes</code>는 <code>XSetWindowAttributes</code>로 여러 속성을 한 번에 바꾸는 일반 함수이고, 나머지는 배경 같은 속성 하나를 바꾸는 편의 함수다.</p>
+
+<h4>XChangeWindowAttributes</h4>
+<pre><code>XChangeWindowAttributes(Display *display, Window w, unsigned long valuemask,
+                        XSetWindowAttributes *attributes);</code></pre>
+<p><strong>목적</strong>: <code>valuemask</code>에 표시한 속성을 <code>attributes</code>의 값으로 바꾼다. 값과 제약은 <code>XCreateWindow</code>와 같다. <code>valuemask</code>가 0이면 <code>attributes</code>를 참조하지 않는다.</p>
+<p>주의할 동작:</p>
+<ul>
+<li><strong>배경을 바꿔도 창 내용은 바뀌지 않는다.</strong> 새 배경으로 다시 칠하려면 <code>XClearWindow</code>를 부른다.</li>
+<li>테두리를 바꾸거나, 배경 변경으로 테두리 타일 원점이 바뀌면 테두리는 다시 칠해진다.</li>
+<li>루트 창의 배경을 <code>None</code>이나 <code>ParentRelative</code>로 바꾸면 기본 배경 pixmap이 복구된다. 루트 창의 테두리를 <code>CopyFromParent</code>로 바꾸면 기본 테두리 pixmap이 복구된다. 루트 창의 커서를 <code>None</code>으로 바꾸면 기본 커서가 복구된다.</li>
+<li>win-gravity를 바꿔도 현재 위치는 변하지 않는다.</li>
+<li>가려진 창의 backing-store를 <code>WhenMapped</code>나 <code>Always</code>로 바꾸거나, map된 창의 backing-planes, backing-pixel, save-under를 바꾸면 즉시 효과가 없을 수 있다.</li>
+<li>창의 컬러맵을 다른 컬러맵으로 바꾸면(기존 맵의 내용 변경이 아니라) <code>ColormapNotify</code>가 생긴다. 보이는 창의 컬러맵을 바꿔도 그 맵이 설치(install)되지 않았으면 화면에 바로 반영되지 않을 수 있다(<code>XInstallColormap</code>). 가능하면 컬러맵은 공유하는 것이 권장된다.</li>
+</ul>
+<h4>이벤트 마스크는 클라이언트마다 따로</h4>
+<p>여러 클라이언트가 같은 창에 입력을 선택할 수 있고, 각자의 이벤트 마스크는 따로 관리된다. 이벤트가 생기면 관심 있는 모든 클라이언트에게 보고된다. 하지만 <code>SubstructureRedirectMask</code>, <code>ResizeRedirectMask</code>, <code>ButtonPressMask</code>는 <strong>한 번에 한 클라이언트만</strong> 선택할 수 있다. 다른 클라이언트가 이미 선택했는데 선택하려 하면 <code>BadAccess</code>가 난다. (창 관리자가 이미 떠 있을 때 두 번째 창 관리자가 실패하는 이유가 이것이다. 또 다른 프로그램의 창에 <code>ButtonPressMask</code>를 걸려다 실패하는 것도 같은 이유다.) do-not-propagate-mask는 클라이언트마다가 아니라 창마다 하나뿐이다.</p>
+<p>오류: <code>BadAccess</code>, <code>BadColor</code>, <code>BadCursor</code>, <code>BadMatch</code>, <code>BadPixmap</code>, <code>BadValue</code>, <code>BadWindow</code>.</p>
+<pre><code>/* 배경색을 바꾸고 커서를 지정한 뒤 다시 칠하기 */
+#include &lt;X11/Xlib.h&gt;
+#include &lt;X11/cursorfont.h&gt;
+
+void set_look(Display *dpy, Window win, unsigned long bg)
+{
+    XSetWindowAttributes a;
+    a.background_pixel = bg;
+    a.cursor = XCreateFontCursor(dpy, XC_hand2);
+    XChangeWindowAttributes(dpy, win, CWBackPixel | CWCursor, &amp;a);
+    XFreeCursor(dpy, a.cursor);       /* 더 참조하지 않으면 바로 해제해도 된다 */
+    XClearWindow(dpy, win);           /* 배경 변경은 자동으로 다시 칠하지 않는다 */
+}</code></pre>
+
+<h4>배경 편의 함수</h4>
+<pre><code>XSetWindowBackground(Display *display, Window w, unsigned long background_pixel);</code></pre>
+<p><strong>목적</strong>: 배경을 지정한 픽셀 값(단색)으로 바꾼다. 내부적으로 그 픽셀로 채운 크기 미정의 pixmap을 쓴다. 창 내용은 바뀌지 않는다. <code>InputOnly</code> 창이면 <code>BadMatch</code>. 오류: <code>BadMatch</code>, <code>BadWindow</code>.</p>
+
+<pre><code>XSetWindowBackgroundPixmap(Display *display, Window w, Pixmap background_pixmap);</code></pre>
+<p><strong>목적</strong>: 배경을 pixmap, <code>ParentRelative</code>, <code>None</code> 중 하나로 바꾼다. pixmap은 더 참조하지 않으면 바로 해제해도 된다. <code>ParentRelative</code>면 부모의 배경 pixmap을 쓰고, 루트 창이면 기본 배경이 복구된다. <code>None</code>이면 배경이 정의되지 않는다. <code>InputOnly</code> 창이면 <code>BadMatch</code>. 오류: <code>BadMatch</code>, <code>BadPixmap</code>, <code>BadWindow</code>.</p>
+<p><code>XSetWindowBackground</code>와 <code>XSetWindowBackgroundPixmap</code>은 둘 다 <strong>현재 창 내용을 바꾸지 않는다</strong>. 바꾼 배경을 보려면 <code>XClearWindow</code>나 <code>XClearArea</code>를 부른다.</p>
+
+<h4>테두리 편의 함수</h4>
+<pre><code>XSetWindowBorder(Display *display, Window w, unsigned long border_pixel);</code></pre>
+<p><strong>목적</strong>: 테두리를 지정한 픽셀 값으로 바꾸고 다시 칠한다. <code>InputOnly</code> 창이면 <code>BadMatch</code>. 오류: <code>BadMatch</code>, <code>BadWindow</code>.</p>
+
+<pre><code>XSetWindowBorderPixmap(Display *display, Window w, Pixmap border_pixmap);</code></pre>
+<p><strong>목적</strong>: 테두리 타일을 pixmap 또는 <code>CopyFromParent</code>로 바꾸고 다시 칠한다. pixmap은 더 참조하지 않으면 바로 해제해도 된다. <code>CopyFromParent</code>면 부모 테두리 pixmap의 사본을 쓴다. <code>InputOnly</code> 창이면 <code>BadMatch</code>. 오류: <code>BadMatch</code>, <code>BadPixmap</code>, <code>BadWindow</code>.</p>
+
+<h4>컬러맵·커서 편의 함수</h4>
+<pre><code>XSetWindowColormap(Display *display, Window w, Colormap colormap);</code></pre>
+<p><strong>목적</strong>: 창의 컬러맵을 지정한다. 컬러맵은 창과 같은 비주얼 타입이어야 하며, 아니면 <code>BadMatch</code>. 오류: <code>BadColor</code>, <code>BadMatch</code>, <code>BadWindow</code>.</p>
+
+<pre><code>XDefineCursor(Display *display, Window w, Cursor cursor);</code></pre>
+<p><strong>목적</strong>: 포인터가 이 창 안에 있을 때 쓸 커서를 지정한다. <code>cursor</code>가 <code>None</code>이면 <code>XUndefineCursor</code>와 같다. 오류: <code>BadCursor</code>, <code>BadWindow</code>.</p>
+
+<pre><code>XUndefineCursor(Display *display, Window w);</code></pre>
+<p><strong>목적</strong>: 이전 <code>XDefineCursor</code>를 취소한다. 이후 포인터가 이 창에 있으면 부모의 커서를 쓴다. 루트 창이면 기본 커서가 복구된다. 오류: <code>BadWindow</code>.</p>
+
+<pre><code>/* 오래 걸리는 작업 동안 모래시계(시계) 커서 보이기 */
+#include &lt;X11/Xlib.h&gt;
+#include &lt;X11/cursorfont.h&gt;
+
+void busy(Display *dpy, Window top, int on)
+{
+    static Cursor watch = None;
+    if (on) {
+        if (watch == None)
+            watch = XCreateFontCursor(dpy, XC_watch);
+        XDefineCursor(dpy, top, watch);
+    } else {
+        XUndefineCursor(dpy, top);
+    }
+    XFlush(dpy);    /* 요청은 버퍼에 쌓이므로 바로 보이게 내보낸다 */
+}</code></pre>
+<div class="tip">커서·배경·테두리를 바꾼 뒤 이벤트 루프로 돌아가지 않고 계산을 오래 하면 화면에 반영되지 않는다. 1장에서 본 것처럼 요청은 버퍼에 쌓이기 때문이다. 바로 보여야 하면 <code>XFlush</code>를 부른다.</div>
+</section><div class="pager"><a href="ch2.html">← 2장. 디스플레이 함수 (Display Functions)</a><a href="./">차례</a><a href="ch4.html">4장. 윈도 정보 함수 (Window Information Functions) →</a></div>
+<a class="top" href="#">↑ 위로</a>
+</html>

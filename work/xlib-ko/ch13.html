@@ -1,0 +1,640 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>13장. 로캘과 국제화 텍스트 함수 (Locales and Internationalized Text Functions) — Xlib 한국어</title>
+<style>
+body{font:16px/1.75 system-ui,"Malgun Gothic",sans-serif;max-width:860px;margin:40px auto;padding:0 16px;background:#111;color:#e8e8e8}
+a{color:#7cf} h1{line-height:1.3} h2{margin-top:3em;border-bottom:1px solid #444;padding-bottom:.3em} h2 small{color:#999;font-weight:normal;font-size:.6em}
+h3{margin-top:2em;color:#fd8} h4{color:#9df}
+code{font-family:ui-monospace,Consolas,monospace;font-size:.92em;background:#222;padding:1px 4px;border-radius:3px}
+pre{background:#1b1d22;border:1px solid #333;padding:12px;overflow-x:auto;border-radius:6px;line-height:1.45} pre code{background:none;padding:0}
+.tip{background:#1d2a1d;border-left:4px solid #6c6;padding:8px 12px;margin:1em 0;border-radius:4px}
+table{border-collapse:collapse;margin:1em 0;font-size:.92em;display:block;overflow-x:auto} td,th{border:1px solid #444;padding:4px 8px;vertical-align:top} th{background:#222}
+nav ol{columns:2} .top{position:fixed;right:16px;bottom:16px;background:#333;padding:6px 10px;border-radius:6px;text-decoration:none}
+.pager{display:flex;justify-content:space-between;gap:12px;margin:2em 0;padding-top:1em;border-top:1px solid #444} .pager a{text-decoration:none}
+</style>
+<p><a href="../../">← 조이봉방</a> · <a href="./">Xlib 번역 차례</a></p><div class="pager"><a href="ch12.html">← 12장. 입력 장치 함수 (Input Device Functions)</a><a href="./">차례</a><a href="ch14.html">14장. 클라이언트 간 통신 함수 (Inter-Client Communication Functions) →</a></div><section id="ch13"><h2 style="margin-top:1em">13장. 로캘과 국제화 텍스트 함수 <small>(Locales and Internationalized Text Functions)</small></h2>
+
+<p>이 장은 "한글·일본어·중국어처럼 ASCII 밖의 글자를 X 프로그램에서 어떻게 그리고, 어떻게 입력받는가"를 다룬다. 원문은 아주 길지만 핵심 흐름은 단순하다.</p>
+<ol>
+<li><code>setlocale</code>로 로캘을 정하고, <code>XSupportsLocale</code>로 Xlib이 그 로캘을 지원하는지 확인하고, <code>XSetLocaleModifiers</code>로 입력기 같은 수식자를 정한다.</li>
+<li>글자를 <b>그릴</b> 때는 폰트 하나(<code>XFontStruct</code>) 대신 <b>폰트 세트</b>(<code>XFontSet</code>)를 만들어 <code>XmbDrawString</code> 같은 함수로 그린다. 이것이 출력 방법(XOM)이다.</li>
+<li>글자를 <b>입력받을</b> 때는 입력 방법(XIM)을 열고 입력 문맥(XIC)을 만든 뒤, 이벤트마다 <code>XFilterEvent</code>를 거치고 <code>XmbLookupString</code>으로 완성된 문자열을 받는다.</li>
+</ol>
+<p>용어부터 정리한다. <b>국제화(internationalization)</b>는 프로그램 소스를 고치거나 다시 컴파일하지 않고도 여러 언어·관습·문자 인코딩에 맞출 수 있게 만드는 일이고, 실제로 특정 언어에 맞추는 것을 <b>지역화(localization)</b>라고 한다. 그 기준이 되는 것이 <b>로캘(locale)</b>이다. 로캘은 Xlib의 다음 동작에 영향을 준다.</p>
+<ul>
+<li>입력기가 돌려주는 텍스트의 인코딩과 처리</li>
+<li>리소스 파일과 리소스 값의 인코딩</li>
+<li>텍스트 문자열의 인코딩과 그리기</li>
+<li>클라이언트끼리 주고받는 텍스트(속성 등)의 인코딩·디코딩</li>
+</ul>
+<p>이 장의 함수들은 멀티바이트(<code>char *</code>, 이름에 <code>Xmb</code>)판과 와이드 문자(<code>wchar_t *</code>, 이름에 <code>Xwc</code>)판이 짝을 이룬다. 두 판은 텍스트 인자의 형태만 다르고 기능은 같다. 또 원문은 이 기능이 "한 문장 안에 여러 언어를 섞는 다국어 프로그램"을 위한 것은 아니며, 서로 독립된 문맥에서 여러 언어를 제한적으로 쓰는 정도를 가능하게 한다고 분명히 적는다.</p>
+
+<div class="tip"><b>Xutf8 함수에 대하여</b>: 이 매뉴얼 본문에는 <code>Xutf8DrawString</code>, <code>Xutf8LookupString</code> 같은 <code>Xutf8</code> 계열이 나오지 않는다. 이 함수들은 나중에(XFree86 시절) libX11에 추가된 확장으로, <code>&lt;X11/Xlib.h&gt;</code>에 <code>X_HAVE_UTF8_STRING</code> 매크로가 정의돼 있으면 쓸 수 있다. 인자와 동작은 대응하는 <code>Xmb</code> 함수와 똑같고, 다만 문자열이 현재 로캘의 인코딩이 아니라 <b>항상 UTF-8</b>이라는 점만 다르다. 오늘날 리눅스는 대부분 UTF-8 로캘이라 <code>Xmb</code>와 <code>Xutf8</code>의 결과가 같지만, 프로그램 내부 문자열이 UTF-8로 고정돼 있다면 <code>Xutf8</code>판을 쓰는 편이 안전하다. 아래 예제에서는 이 두 계열을 함께 보여 준다.</div>
+
+<h3>13.1 X 로캘 관리 (X Locale Management)</h3>
+<p>ANSI C 라이브러리를 따르는 시스템에서는 로캘을 정하는 방법이 <code>setlocale</code>이다. 이 호출 하나가 C 라이브러리와 Xlib 양쪽의 로캘을 함께 정한다. Xlib의 동작을 좌우하는 것은 그중 <code>LC_CTYPE</code> 범주이며, 이를 <b>현재 로캘(current locale)</b>이라고 부른다.</p>
+<p>그런데 X가 호스트가 지원하는 모든 로캘을 지원해야 하는 것은 아니다. 그래서 확인 함수가 있다.</p>
+<pre><code>Bool XSupportsLocale(void);</code></pre>
+<p><b>목적</b>: 현재 로캘에서 Xlib 함수들이 제대로 동작할 수 있는지 알려 준다.</p>
+<ul>
+<li><code>True</code>면 지원. <code>False</code>면, 반환값으로 <code>XLocaleNotSupported</code>가 정의된 로캘 의존 함수들은 그 값을 돌려주고, 나머지 로캘 의존 함수들은 "C" 로캘로 동작한다.</li>
+</ul>
+
+<p>로캘과 X 수식자를 고르는 책임은 클라이언트에게 있다. 대부분의 클라이언트는 다음 세 함수를 차례로 부른다: 호스트의 로캘 설정 함수(<code>setlocale</code>), <code>XSupportsLocale</code>, <code>XSetLocaleModifiers</code>.</p>
+<pre><code>char *XSetLocaleModifiers(char *modifier_list);</code></pre>
+<p><b>목적</b>: 현재 로캘에 대한 X 수식자(modifier)를 설정한다.</p>
+<ul>
+<li><code>modifier_list</code>: <code>"@category=value"</code> 꼴을 0개 이상 이어 붙인 문자열. 현재 표준으로 정해진 범주는 <code>im</code>(입력 방법 선택) 하나뿐이고, 그 값(입력기 이름)은 표준화돼 있지 않다. 예: <code>"@im=ibus"</code>, <code>"@im=fcitx"</code>.</li>
+<li>호스트의 기본 수식자(POSIX 시스템에서는 환경 변수 <code>XMODIFIERS</code>)가 이 목록 <b>뒤에</b> 덧붙여진다. 같은 범주가 여러 번 나오면 <b>앞의 것</b>이 이긴다. 그래서 <code>XSetLocaleModifiers("")</code>를 부르면 사용자의 <code>XMODIFIERS</code>가 그대로 적용된다.</li>
+<li>범주가 목록에 아예 없거나 값이 빈 문자열이면 구현이 정한 기본값이 쓰인다.</li>
+<li>성공하면 "같은 로캘에서 이 문자열로 다시 부르면 지금 설정이 복원되는" 문자열을 돌려준다. <code>NULL</code>을 넘기면 설정은 바꾸지 않고 현재 설정 문자열만 돌려준다. 잘못된 값이 있으면 <code>NULL</code>을 돌려주고 아무것도 바꾸지 않는다.</li>
+<li>돌려받은 문자열은 Xlib 소유다. 고치거나 해제하지 않는다.</li>
+</ul>
+<div class="tip"><b>주의</b>: 프로그램 시작 직후나 로캘을 바꾼 직후에는 수식자 값이 "정해지지 않은" 상태다. 그래서 로캘을 정한 다음, 로캘 의존 Xlib 함수를 부르기 <b>전에</b> 반드시 <code>NULL</code>이 아닌 인자로 <code>XSetLocaleModifiers</code>를 불러야 한다. 이 호출을 빠뜨리면 <code>XOpenIM</code>이 엉뚱한 입력기를 찾거나 실패하는 일이 흔하다.</div>
+<p>원문이 권하는 로캘·수식자 값의 우선순위는 ① 명령행 옵션 ② 리소스 ③ 빈 문자열(<code>""</code>, 즉 환경 변수에 맡김) 순이다. 명령행이나 리소스로 로캘을 지정했다면 모든 범주를 그 로캘로 맞추는 것이 좋다.</p>
+
+<h4>예제: 로캘 초기화의 정석</h4>
+<pre><code>#include &lt;locale.h&gt;
+#include &lt;stdio.h&gt;
+#include &lt;X11/Xlib.h&gt;
+
+int init_locale(void)
+{
+    if (setlocale(LC_ALL, "") == NULL)      /* LANG, LC_ALL 등 환경 변수를 따른다 */
+        fprintf(stderr, "setlocale 실패, C 로캘로 진행\n");
+    if (!XSupportsLocale()) {
+        fprintf(stderr, "X가 이 로캘을 지원하지 않음\n");
+        setlocale(LC_ALL, "C");
+    }
+    if (XSetLocaleModifiers("") == NULL)    /* XMODIFIERS 적용 */
+        fprintf(stderr, "XSetLocaleModifiers 실패\n");
+    return 0;
+}</code></pre>
+<div class="tip"><code>setlocale(LC_ALL, "")</code>를 부르지 않으면 C 프로그램은 항상 "C" 로캘로 시작한다. 이 상태에서는 한글이 들어간 UTF-8 문자열을 <code>XmbDrawString</code>에 넘겨도 제대로 나오지 않는다. 한글이 깨지면 가장 먼저 이 호출과 <code>LANG=ko_KR.UTF-8</code> 같은 환경 변수를 확인한다.</div>
+
+<h3>13.2 로캘과 수식자 의존성 (Locale and Modifier Dependencies)</h3>
+<p>국제화 Xlib 함수들은 두 가지 중 하나의 로캘을 따른다: <b>호출 시점의 현재 로캘</b>, 또는 함수에 넘긴 객체가 <b>만들어질 때의 로캘</b>. 원문 표를 요약하면 다음과 같다.</p>
+<table>
+<tr><th>로캘을 정하는 것</th><th>영향을 받는 함수</th><th>무엇에 영향</th></tr>
+<tr><td><code>setlocale</code></td><td><code>XSupportsLocale</code>, <code>XSetLocaleModifiers</code></td><td>로캘 조회·수식자 설정</td></tr>
+<tr><td><code>setlocale</code></td><td><code>XrmGetFileDatabase</code>, <code>XrmGetStringDatabase</code></td><td>만들어지는 <code>XrmDatabase</code>의 로캘</td></tr>
+<tr><td><code>XrmDatabase</code></td><td><code>XrmPutFileDatabase</code>, <code>XrmLocaleOfDatabase</code></td><td>데이터베이스의 로캘</td></tr>
+<tr><td><code>setlocale</code></td><td><code>XmbSetWMProperties</code>, <code>XmbTextPropertyToTextList</code>, <code>XwcTextListToTextProperty</code> 등</td><td>주고받는 텍스트의 인코딩</td></tr>
+<tr><td><code>setlocale</code></td><td><code>XOpenIM</code>, <code>XRegisterIMInstantiateCallback</code></td><td>어떤 입력 방법을 고를지</td></tr>
+<tr><td><code>XIM</code></td><td><code>XCreateIC</code>, <code>XLocaleOfIM</code></td><td>입력 문맥 설정</td></tr>
+<tr><td><code>XIC</code></td><td><code>XmbLookupString</code>, <code>XwcLookupString</code></td><td>키보드 배치, 돌려받는 텍스트 인코딩</td></tr>
+<tr><td><code>setlocale</code></td><td><code>XOpenOM</code>, <code>XCreateFontSet</code></td><td>출력 방법, 폰트 세트의 문자 집합</td></tr>
+<tr><td><code>XFontSet</code>/<code>XOC</code></td><td><code>XmbDrawText</code>, <code>XmbTextExtents</code>, <code>XExtentsOfFontSet</code> 등</td><td>넘기는 텍스트의 로캘, 로캘 의존 크기 정보</td></tr>
+<tr><td><code>setlocale</code></td><td><code>XGetErrorText</code>, <code>XGetErrorDatabaseText</code></td><td>오류 메시지의 언어</td></tr>
+</table>
+<p>왜 이런 구분이 필요할까? 예를 들어 폰트 세트를 만든 뒤에 <code>setlocale</code>로 로캘을 바꿔도, 그 폰트 세트로 그리는 글자는 <b>만들 때의 로캘</b>로 해석된다. 객체가 로캘을 "붙잡고" 있기 때문이다. 따라서 로캘을 바꾸려면 관련 객체(폰트 세트, 입력 방법)를 새로 만들어야 한다.</p>
+<p>그 밖의 규칙:</p>
+<ul>
+<li>로캘이 같으면, X 함수가 돌려준 로캘 인코딩 문자열을 C 라이브러리 함수에 넘겨도 되고 그 반대도 된다.</li>
+<li>상태 의존(state-dependent) 인코딩이라면 모든 문자열은 그 인코딩의 초기 상태에서 시작한다고 가정한다.</li>
+<li>Xlib 함수는 현재 로캘이나 X 수식자를 바꾸지 않는 것처럼 동작한다(내부에서 바꾸더라도 저장했다가 되돌린다). 또 <code>mblen</code>, <code>mbtowc</code>, <code>wctomb</code>, <code>strtok</code>의 전역 상태도 건드리지 않는다.</li>
+</ul>
+
+<h3>13.3 가변 인자 목록 (Variable Argument Lists)</h3>
+<p>이 장의 함수 중 <code>...</code>가 있는 것(<code>XCreateIC</code>, <code>XSetICValues</code>, <code>XGetIMValues</code> 등)은 <b>이름-값 쌍</b>의 목록을 받는다. 이름은 문자열(<code>XNInputStyle</code> 같은 상수), 값은 <code>XPointer</code> 크기의 값이며, 이름 자리에 <code>NULL</code>이 오면 목록이 끝난다.</p>
+<p>목록 안에 또 다른 목록을 넣을 수도 있다. 이름 자리에 <code>XNVaNestedList</code>를 쓰면 다음 값이 <code>XVaNestedList</code>로 해석되어 그 자리에 "펼쳐서" 끼워진다. 미리보기(preedit)·상태(status) 속성은 반드시 이 중첩 목록으로 넘겨야 하므로 실제로 자주 쓴다.</p>
+<pre><code>XVaNestedList XVaCreateNestedList(int dummy, ...);</code></pre>
+<p><b>목적</b>: 이름-값 쌍들을 하나의 중첩 목록 포인터로 묶는다.</p>
+<ul>
+<li><code>dummy</code>: 쓰지 않는 인자. ANSI C의 가변 인자 함수는 고정 인자가 하나 이상 있어야 해서 존재한다. 보통 0을 넘긴다.</li>
+<li>항목은 그대로 복사되지만, <b>포인터가 가리키는 데이터는 복사되지 않는다</b>. 목록을 쓰는 동안 그 데이터가 살아 있어야 한다.</li>
+<li>다 쓰면 <code>XFree</code>로 해제한다.</li>
+</ul>
+<pre><code>XPoint spot = { 10, 20 };
+XVaNestedList attr = XVaCreateNestedList(0, XNSpotLocation, &amp;spot, NULL);
+XSetICValues(ic, XNPreeditAttributes, attr, NULL);
+XFree(attr);</code></pre>
+<div class="tip">원문의 함수 원형 표기는 <code>XVaCreateNestedList(int dummy)</code>처럼 <code>...</code>가 빠져 보이는데(문서 변환 과정의 누락), 실제로는 가변 인자 함수다. <code>XSetOMValues</code>, <code>XCreateIC</code> 등 이 장의 다른 원형도 마찬가지로 끝의 <code>...</code>가 빠져 있다.</div>
+
+<h3>13.4 출력 방법 (Output Methods)</h3>
+
+<h4>13.4.1 개요</h4>
+<p>로캘에 따라 텍스트 하나가 여러 "구성 요소"로 나뉘고, 요소마다 다른 폰트와 문자 집합(charset)이 필요할 수 있다. 예컨대 옛 EUC-KR 로캘에서 "Hello 안녕"을 그리려면 영문은 ISO8859-1 폰트, 한글은 KSC5601 폰트가 필요했다. 언어에 따라 쓰는 방향이 다르거나(아랍어·히브리어), 이웃 글자에 따라 모양이 바뀌는(문맥 의존) 경우도 있다.</p>
+<p>이런 로캘별 지식을 클라이언트가 일일이 알 필요 없도록 해 주는 것이 <b>X 출력 방법(XOM)</b>이다. 출력 방법이 해 주는 일은 네 가지다.</p>
+<ul>
+<li>로캘 텍스트를 그리는 데 필요한 폰트들의 집합을 만든다.</li>
+<li>폰트 세트로 텍스트를 그린다(호출자는 로캘 세부를 몰라도 된다).</li>
+<li>텍스트의 진행 거리(escapement)와 크기(extents)를 픽셀 단위로 알려 준다.</li>
+<li>양방향이나 문맥 의존 그리기가 필요한지 알려 준다.</li>
+</ul>
+<p>추상화는 둘이다. 출력 방법 자체는 <code>XOM</code>, 특정 출력 "흐름"의 상태는 <b>출력 문맥</b> <code>XOC</code>다. <code>XOC</code>는 <code>XFontSet</code>과 같은 타입처럼 쓸 수 있으며(호환), 더 일반화된 개념이다. 대부분의 프로그램은 <code>XOM</code>/<code>XOC</code>를 직접 다루지 않고 편의 함수 <code>XCreateFontSet</code>만 쓴다.</p>
+
+<h4>13.4.2 출력 방법 함수</h4>
+<pre><code>XOM XOpenOM(Display *display, XrmDatabase db, char *res_name, char *res_class);
+Status XCloseOM(XOM om);
+char *XSetOMValues(XOM om, ...);
+char *XGetOMValues(XOM om, ...);
+Display *XDisplayOfOM(XOM om);
+char *XLocaleOfOM(XOM om);</code></pre>
+<ul>
+<li><code>XOpenOM</code>: 현재 로캘과 수식자에 맞는 출력 방법을 연다. 로캘은 여는 순간 고정되며 나중에 바꿀 수 없다. <code>db</code>는 출력 방법이 자기 전용 리소스를 찾을 데이터베이스(<code>NULL</code> 가능), <code>res_name</code>/<code>res_class</code>는 그때 접두어로 쓸 응용의 이름·클래스다. 이 두 문자열은 호출 뒤에 버려도 되지만 <code>db</code>는 출력 방법이 살아 있는 동안 유지해야 한다. 실패하면 <code>NULL</code>.</li>
+<li><code>XSetOMValues</code>/<code>XGetOMValues</code>: 성공하면 <code>NULL</code>, 실패하면 처리하지 못한 첫 인자의 이름을 돌려준다. Xlib이 정한 "설정 가능한" 표준 OM 값은 없고, 읽기 전용 값만 있다.</li>
+</ul>
+<p>읽을 수 있는 XOM 값:</p>
+<table>
+<tr><th>XOM 값</th><th>뜻</th></tr>
+<tr><td><code>XNRequiredCharSet</code></td><td>이 로캘에 필요한 charset 목록(<code>XOMCharSetList</code>: <code>charset_count</code>, <code>charset_list</code>). Xlib 소유, <code>XCloseOM</code> 때 해제.</td></tr>
+<tr><td><code>XNQueryOrientation</code></td><td>지원하는 전체 글 방향 목록(<code>XOMOrientation</code>). <code>XOMOrientation_LTR_TTB</code>(왼→오, 위→아래)는 항상 있고 나머지(<code>RTL_TTB</code>, <code>TTB_LTR</code>, <code>TTB_RTL</code>, <code>Context</code>)는 로캘에 따라 다르다. 클라이언트가 <code>XFree</code>로 해제.</td></tr>
+<tr><td><code>XNDirectionalDependentDrawing</code></td><td><code>True</code>면 그리기 함수가 방향성 텍스트를 알아서 재배열한다. <code>False</code>면 모두 왼→오로 가정.</td></tr>
+<tr><td><code>XNContextualDrawing</code></td><td><code>True</code>면 문맥에 따른 글자 모양 변경·글리프 결합을 해 준다.</td></tr>
+</table>
+
+<h4>13.4.3 출력 문맥 함수와 값</h4>
+<pre><code>XOC XCreateOC(XOM om, ...);
+void XDestroyOC(XOC oc);
+XOM XOMOfOC(XOC oc);
+char *XSetOCValues(XOC oc, ...);
+char *XGetOCValues(XOC oc, ...);</code></pre>
+<p><code>XCreateOC</code>는 출력 방법 안에 출력 문맥을 만든다. <code>XNBaseFontName</code>(기본 폰트 이름 목록)은 <b>만들 때 반드시</b> 줘야 하며, 없으면 만들어지지 않는다. 주요 XOC 값은 다음과 같다(자주 쓰지 않아 요약만).</p>
+<table>
+<tr><th>XOC 값</th><th>대응 함수</th><th>설명</th></tr>
+<tr><td><code>XNBaseFontName</code></td><td><code>XCreateFontSet</code></td><td>생성 시 필수, 이후 변경 불가. 읽기 가능.</td></tr>
+<tr><td><code>XNMissingCharSet</code></td><td><code>XCreateFontSet</code></td><td>폰트가 없는 charset 목록(읽기).</td></tr>
+<tr><td><code>XNDefaultString</code></td><td><code>XCreateFontSet</code></td><td>그릴 수 없는 글자 대신 그려지는 문자열(읽기).</td></tr>
+<tr><td><code>XNOrientation</code></td><td>-</td><td>현재 글 방향. <code>XNQueryOrientation</code>이 돌려준 값 중 하나.</td></tr>
+<tr><td><code>XNResourceName</code>, <code>XNResourceClass</code></td><td>-</td><td>리소스 조회 접두어.</td></tr>
+<tr><td><code>XNFontInfo</code></td><td><code>XFontsOfFontSet</code></td><td>실제 쓰인 <code>XFontStruct</code>와 폰트 이름 목록(<code>XOMFontInfo</code>).</td></tr>
+<tr><td><code>XNOMAutomatic</code></td><td>-</td><td>이 문맥이 <code>XCreateFontSet</code>으로 만들어졌는지. <code>True</code>면 <code>XFreeFontSet</code>으로, 아니면 <code>XDestroyOC</code>로 해제해야 한다.</td></tr>
+</table>
+
+<h4>13.4.4 폰트 세트 만들기와 해제 (Creating and Freeing a Font Set)</h4>
+<pre><code>XFontSet XCreateFontSet(Display *display, char *base_font_name_list,
+                        char ***missing_charset_list_return,
+                        int *missing_charset_count_return,
+                        char **def_string_return);</code></pre>
+<p><b>목적</b>: 현재 로캘에 필요한 폰트들을 모아 폰트 세트를 만든다. 내부적으로 출력 방법을 몰래 열고(<code>XNOMAutomatic</code>=<code>True</code>) 기본값으로 출력 문맥을 만드는 편의 함수다.</p>
+<ul>
+<li><code>base_font_name_list</code>: 쉼표로 구분한 기본 폰트 이름들. 쉼표 양옆 공백은 무시된다. XLFD 이름을 쓰면 charset 부분을 생략하거나 <code>*</code>로 두어, 하나의 이름으로 여러 로캘에 필요한 폰트를 모두 찾게 할 수 있다. XLFD가 아닌 이름(별칭)을 주면 Xlib이 폰트 속성에서 XLFD 이름을 알아내려 시도한다.</li>
+<li><code>missing_charset_list_return</code>/<code>missing_charset_count_return</code>: 폰트를 찾지 못한 charset 목록과 개수. 다 찾았으면 <code>NULL</code>과 0. 목록은 <code>XFreeStringList</code>로 해제한다.</li>
+<li><code>def_string_return</code>: 빠진 charset의 글자 대신 그려질 문자열. 빈 문자열이면 아무것도 그리지 않고 진행 거리도 0이다. Xlib 소유이므로 해제하지 않는다.</li>
+</ul>
+<p>Xlib은 로캘이 요구하는 charset마다 기본 이름 목록을 앞에서부터 훑어, 대략 다음 순서로 처음 맞는 것을 고른다: ① 그 charset(또는 그 상위 집합, 예: ASCII 대신 ISO8859-1)을 명시한 XLFD 이름 ② 그 charset으로 다시 매핑할 수 있는 charset을 명시한 이름들 ③ 첫 XLFD 이름의 charset 필드를 필요한 charset으로 바꿔 끼운 이름 ④ 구현 나름대로 매핑할 수 있는 이름.</p>
+<p>그래서 다음 세 방식이 모두 가능하다.</p>
+<pre><code>/* 1) charset까지 정확히 지정 */
+"-JIS-Fixed-Medium-R-Normal--26-180-100-100-C-240-JISX0208.1983-0,"
+"-Adobe-Courier-Bold-R-Normal--25-180-75-75-M-150-ISO8859-1"
+/* 2) charset만 빼고 지정 */
+"-JIS-Fixed-Medium-R-Normal--26-180-100-100-C-240,"
+"-Adobe-Courier-Bold-R-Normal--25-180-100-100-M-150"
+/* 3) 조건만 주고 Xlib에 맡김 */
+"-*-*-*-R-Normal--*-180-100-100-*-*"</code></pre>
+<p>반환값 규칙: 메모리 부족이나 로캘 미지원이면 <code>NULL</code>. 필요한 charset 중 하나도 폰트가 없거나, 로캘 정의상 꼭 있어야 하는 charset의 폰트가 없으면 역시 <code>NULL</code>. 일부만 빠졌으면 <b>유효한 폰트 세트를 돌려주면서</b> 빠진 목록을 알려 준다. 즉 "<code>NULL</code>이 아니다 = 모든 글자가 나온다"가 아니다. 무엇을 경고할지는 클라이언트가 정한다.</p>
+<pre><code>int  XFontsOfFontSet(XFontSet font_set, XFontStruct ***font_struct_list_return,
+                     char ***font_name_list_return);
+char *XBaseFontNameListOfFontSet(XFontSet font_set);
+char *XLocaleOfFontSet(XFontSet font_set);
+void  XFreeFontSet(Display *display, XFontSet font_set);</code></pre>
+<ul>
+<li><code>XFontsOfFontSet</code>: 실제 쓰인 <code>XFontStruct</code> 목록과 폰트 이름 목록을 돌려주고, 개수를 반환한다. 둘 다 Xlib 소유다. 폰트 데이터가 미리 다 읽혀 있다는 보장이 없어서 <code>per_char</code> 정보는 있을 수도 없을 수도 있다.</li>
+<li><code>XBaseFontNameListOfFontSet</code>: 만들 때 준 기본 이름 목록(XLFD로 바뀌었으면 바뀐 이름).</li>
+<li><code>XLocaleOfFontSet</code>: 폰트 세트에 묶인 로캘 이름.</li>
+<li><code>XFreeFontSet</code>: 폰트 세트와 거기 딸린 이름 목록, <code>XFontStruct</code> 목록, <code>XFontSetExtents</code>를 해제한다. <code>XCreateFontSet</code>으로 만든 것이면 몰래 연 <code>XOM</code>도 닫는다.</li>
+</ul>
+
+<h4>13.4.5 폰트 세트 크기 정보 (Obtaining Font Set Metrics)</h4>
+<p>몇 가지 개념을 먼저 잡는다. <b>주 진행 방향</b>(primary draw direction)은 글자가 이어지며 원점이 나아가는 방향인데, 현재 Xlib 인터페이스는 왼→오만 정의한다. <b>그리기 원점</b>은 그리기 함수에 넘긴 (x, y)이고, <b>기준선(baseline)</b>은 원점을 지나는 진행 방향 선이다. <b>잉크(ink)</b>는 실제로 전경색이 칠해지는 픽셀이며, 글자 사이 간격이나 이미지 텍스트의 배경은 포함하지 않는다.</p>
+<p>그리기 함수는 로캘에 따라 글자 렌더링 순서를 뒤집을 수도(양방향), 이웃 글자에 따라 모양을 바꿀 수도(문맥 의존) 있다. 그래서 "두 글자를 한 번에 그린 결과"와 "한 글자씩 두 번 그린 결과"가 다를 수 있고, 글자를 끼워 넣으면 이웃 글자까지 다시 그려야 할 수 있다.</p>
+<pre><code>Bool XDirectionalDependentDrawing(XFontSet font_set);
+Bool XContextualDrawing(XFontSet font_set);
+Bool XContextDependentDrawing(XFontSet font_set);</code></pre>
+<p>각각 "방향 재배열을 하는가", "문맥 의존 모양 변경이 있을 수 있는가", "둘 중 하나라도 해당하는가"를 알려 준다.</p>
+<p>또 하나 기억할 점: 그리기 함수는 줄바꿈, 탭 같은 제어 문자를 해석하지 않는다. 공백 이외의 비인쇄 문자를 그릴 때의 동작은 구현마다 다르다. 여러 줄 텍스트라면 클라이언트가 직접 줄을 나눠 줄마다 그려야 한다.</p>
+<pre><code>typedef struct {
+    XRectangle max_ink_extent;      /* 그릴 수 있는 모든 글자에 대한 최대 잉크 영역 */
+    XRectangle max_logical_extent;  /* 최대 논리 영역(간격 포함) */
+} XFontSetExtents;
+
+XFontSetExtents *XExtentsOfFontSet(XFontSet font_set);</code></pre>
+<p><b>목적</b>: 폰트 세트 전체의 최대 글자 크기. <code>XRectangle</code>의 x, y는 원점 기준 왼쪽 위 모서리이고 너비·높이는 항상 양수다. 따라서 <code>y</code>는 보통 음수(기준선 위)다. <code>max_logical_extent</code>는 줄 간격이나 "글자 n개가 들어갈 입력란 크기"를 정할 때 쓴다. 반환 구조체는 Xlib 소유다.</p>
+<pre><code>int XmbTextEscapement(XFontSet font_set, char *string, int num_bytes);
+int XwcTextEscapement(XFontSet font_set, wchar_t *string, int num_wchars);
+int XmbTextExtents(XFontSet font_set, char *string, int num_bytes,
+                   XRectangle *overall_ink_return, XRectangle *overall_logical_return);
+int XwcTextExtents(XFontSet font_set, wchar_t *string, int num_wchars,
+                   XRectangle *overall_ink_return, XRectangle *overall_logical_return);</code></pre>
+<ul>
+<li><code>...Escapement</code>: 원점에서 다음 글자의 원점까지의 거리(픽셀). 렌더링 순서와 관계없이 항상 양수다. 문자열 너비로 생각하면 된다.</li>
+<li><code>...Extents</code>: 문자열 전체의 잉크 상자와 논리 상자를 채우고, escapement 값을 돌려준다. 필요 없는 쪽 인자는 <code>NULL</code>.</li>
+<li>길이 인자가 <code>Xmb</code>는 <b>바이트 수</b>, <code>Xwc</code>는 <b>글자 수</b>라는 점에 주의한다. UTF-8 "가"는 3바이트다.</li>
+<li>빠진 charset의 글자는 기본 문자열(default string)의 크기로 계산된다. 잘못된 코드포인트에 대한 동작은 정의되지 않았다.</li>
+</ul>
+<pre><code>Status XmbTextPerCharExtents(XFontSet font_set, char *string, int num_bytes,
+        XRectangle *ink_array_return, XRectangle *logical_array_return,
+        int array_size, int *num_chars_return,
+        XRectangle *overall_ink_return, XRectangle *overall_logical_return);
+/* XwcTextPerCharExtents 도 같은 모양 (wchar_t *, num_wchars) */</code></pre>
+<p><b>목적</b>: 글자 하나하나의 잉크·논리 상자를 배열로 받는다. 커서 위치 계산, 마우스 클릭 위치를 글자 위치로 바꾸기 등에 쓴다. 배열이 작으면 0을 돌려주고 <code>num_chars_return</code>에 필요한 개수를 넣어 준다. 여러 글자가 하나의 글리프로 합쳐지면 그 글자들의 상자는 모두 같다.</p>
+
+<h4>13.4.6 폰트 세트로 텍스트 그리기 (Drawing Text Using Font Sets)</h4>
+<p>8장의 <code>XDrawText</code>/<code>XDrawString</code>/<code>XDrawImageString</code>과 비슷하지만, 폰트 하나 대신 폰트 세트를 쓰고 문자열 바이트를 "폰트 글리프 번호"가 아니라 <b>로캘의 문자</b>로 해석한다는 점이 다르다. GC의 font 값은 무시되며, 이 함수들이 GC의 폰트를 바꿔 놓을 수도 있다(그리기 뒤 같은 GC로 <code>XDrawString</code>을 쓸 때 주의). <code>BadFont</code> 오류가 나면 문제 글자 앞까지는 그려졌을 수 있다.</p>
+<pre><code>void XmbDrawString(Display *display, Drawable d, XFontSet font_set, GC gc,
+                   int x, int y, char *string, int num_bytes);
+void XwcDrawString(Display *display, Drawable d, XFontSet font_set, GC gc,
+                   int x, int y, wchar_t *string, int num_wchars);
+void XmbDrawImageString(Display *display, Drawable d, XFontSet font_set, GC gc,
+                        int x, int y, char *string, int num_bytes);
+/* XwcDrawImageString 도 같은 모양 */</code></pre>
+<ul>
+<li><code>...DrawString</code>: 전경색으로 글자만 그린다.</li>
+<li><code>...DrawImageString</code>: 먼저 <code>XmbTextExtents</code>의 논리 상자만큼 GC 배경색으로 칠한 뒤 글자를 그린다. 텍스트를 덮어쓰며 갱신할 때 편하다.</li>
+<li>(x, y)는 <b>기준선 위의 원점</b>이다. 글자 윗부분이 창 밖으로 잘리지 않게 하려면 y를 <code>-max_logical_extent.y</code> 이상으로 준다.</li>
+</ul>
+<pre><code>typedef struct {
+    char     *chars;     /* 문자열 */
+    int       nchars;    /* 바이트 수 */
+    int       delta;     /* 이 항목 앞에 추가로 띄울 픽셀 */
+    XFontSet  font_set;  /* None이면 앞 항목의 폰트 세트 유지 */
+} XmbTextItem;           /* XwcTextItem 은 wchar_t *chars, nchars=글자 수 */
+
+void XmbDrawText(Display *display, Drawable d, GC gc, int x, int y,
+                 XmbTextItem *items, int nitems);</code></pre>
+<p><code>XmbDrawText</code>는 여러 조각을 서로 다른 폰트 세트와 간격으로 이어 그린다. 맨 앞 항목들의 <code>font_set</code>이 <code>None</code>이면 그 항목들은 그려지지 않는다. 조각 사이에서는 문맥 의존 렌더링이 일어나지 않는다.</p>
+
+<h4>예제: UTF-8 한글 그리기 (Xutf8DrawString)</h4>
+<pre><code>/* cc fontset.c -lX11 ;  LANG=ko_KR.UTF-8 ./a.out */
+#include &lt;locale.h&gt;
+#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+#include &lt;X11/Xlib.h&gt;
+
+int main(void)
+{
+    setlocale(LC_ALL, "");
+    if (!XSupportsLocale()) { fprintf(stderr, "locale not supported\n"); return 1; }
+    XSetLocaleModifiers("");
+
+    Display *dpy = XOpenDisplay(NULL);
+    if (!dpy) return 1;
+    int scr = DefaultScreen(dpy);
+    Window win = XCreateSimpleWindow(dpy, RootWindow(dpy, scr), 0, 0, 400, 120, 1,
+                                     BlackPixel(dpy, scr), WhitePixel(dpy, scr));
+    XSelectInput(dpy, win, ExposureMask | KeyPressMask);
+    XMapWindow(dpy, win);
+
+    char **missing; int nmissing; char *defstr;
+    XFontSet fs = XCreateFontSet(dpy, "-*-*-medium-r-normal--16-*-*-*-*-*-*-*,*",
+                                 &amp;missing, &amp;nmissing, &amp;defstr);
+    if (!fs) { fprintf(stderr, "XCreateFontSet failed\n"); return 1; }
+    for (int i = 0; i &lt; nmissing; i++)
+        fprintf(stderr, "missing charset: %s\n", missing[i]);
+    if (missing) XFreeStringList(missing);
+
+    XFontSetExtents *ext = XExtentsOfFontSet(fs);
+    int line_h = ext-&gt;max_logical_extent.height;
+    int ascent = -ext-&gt;max_logical_extent.y;     /* 기준선 위 높이 */
+
+    GC gc = DefaultGC(dpy, scr);
+    const char *msg = "안녕하세요, X11!";
+    for (;;) {
+        XEvent ev;
+        XNextEvent(dpy, &amp;ev);
+        if (ev.type == Expose &amp;&amp; ev.xexpose.count == 0) {
+#ifdef X_HAVE_UTF8_STRING
+            Xutf8DrawString(dpy, win, fs, gc, 10, 10 + ascent, msg, strlen(msg));
+#else
+            XmbDrawString(dpy, win, fs, gc, 10, 10 + ascent, (char *)msg, strlen(msg));
+#endif
+            XRectangle ink, logical;
+            XmbTextExtents(fs, (char *)msg, strlen(msg), &amp;ink, &amp;logical);
+            /* 문자열 아래에 너비만큼 밑줄 */
+            XDrawLine(dpy, win, gc, 10, 12 + line_h, 10 + logical.width, 12 + line_h);
+        } else if (ev.type == KeyPress) break;
+    }
+    XFreeFontSet(dpy, fs);
+    XCloseDisplay(dpy);
+    return 0;
+}</code></pre>
+<div class="tip"><b>흔한 함정</b>
+<ul>
+<li>폰트 세트는 서버의 <b>코어 폰트</b>(비트맵 XLFD 폰트)를 쓴다. 요즘 시스템에는 한글 코어 폰트가 설치돼 있지 않은 경우가 많아, 빠진 charset이 나오고 한글이 기본 문자열(빈칸 등)로 나올 수 있다. 이때는 <code>xlsfonts | grep -i ksc</code>, <code>iso10646</code> 폰트 설치 여부를 확인한다. 안티앨리어싱된 현대적 글꼴이 필요하면 Xft/fontconfig 같은 별도 라이브러리를 쓰는 것이 일반적이다(이 매뉴얼 범위 밖).</li>
+<li><code>num_bytes</code>에 글자 수를 넣는 실수. <code>Xmb</code>/<code>Xutf8</code>는 바이트 수(<code>strlen</code>)다.</li>
+<li>폰트 세트를 만든 뒤 로캘을 바꿔도 폰트 세트는 옛 로캘로 해석한다.</li>
+</ul></div>
+
+<h3>13.5 입력 방법 (Input Methods)</h3>
+
+<h4>13.5.1 개요: 왜 입력기가 필요한가</h4>
+<p>알파벳 언어는 키보드에 없는 몇몇 글자(악센트 등)만 여러 키 조합으로 넣으면 된다(유럽식·compose·dead-key 입력). 한국어 한글은 자음 14개, 모음 10개의 기본 자모를 조합해 음절을 만드는데, 두 번째·세 번째 자모가 들어올 때마다 앞 자모의 모양과 크기가 바뀌며 화면에 보이는 글자가 계속 변한다. 일본어(가나→한자 변환), 중국어(병음 등 수십 가지 방식)처럼 수천~수만 자의 표의 문자를 쓰는 언어는 키보드로 직접 칠 수 없으니, 소리나 모양으로 입력한 뒤 후보 중에서 고르는 단계가 필요하다. 원문은 한국어에서도 한글을 한자로 바꾸는 변환을 예로 든다.</p>
+<p>이처럼 여러 키 입력으로 글자를 조립하는 과정을 <b>미리 편집(preediting)</b>이라고 한다. 입력기는 다음 화면 영역을 쓸 수 있다.</p>
+<ul>
+<li><b>상태 영역(status area)</b>: 키보드 LED의 연장. 한/영 상태 같은 입력기 내부 상태를 보여 준다.</li>
+<li><b>미리 편집 영역(preedit area)</b>: 아직 확정되지 않은 조합 중 글자를 보여 준다.</li>
+<li><b>보조 영역(auxiliary area)</b>: 후보 목록 같은 팝업. 입력기가 혼자 관리한다.</li>
+</ul>
+<p>미리 편집을 어디에 보여 주느냐에 따라 입력 스타일이 나뉜다.</p>
+<table>
+<tr><th>스타일</th><th>뜻</th><th>대응 XIMStyle</th></tr>
+<tr><td>on-the-spot</td><td>응용 창의 커서 위치에 직접 표시. 응용이 콜백으로 직접 그린다.</td><td><code>XIMPreeditCallbacks</code></td></tr>
+<tr><td>over-the-spot</td><td>입력 위치 위에 입력기가 창을 띄워 표시</td><td><code>XIMPreeditPosition</code></td></tr>
+<tr><td>off-the-spot</td><td>응용 창 안의 별도 영역(보통 아래쪽)에 표시</td><td><code>XIMPreeditArea</code></td></tr>
+<tr><td>root-window</td><td>루트 창의 자식 창에 표시(응용은 아무것도 안 함)</td><td><code>XIMPreeditNothing</code></td></tr>
+</table>
+<p>모든 언어의 입력기를 모든 응용에 넣을 수는 없으므로, 입력기를 별도 프로세스인 <b>입력 서버(input server)</b>로 두고 응용이 그와 통신하게 하는 것이 Xlib 설계 목표다(오늘날의 ibus, fcitx, nimf 등이 XIM 서버 역할을 한다). 구조는 두 가지다.</p>
+<ul>
+<li><b>front-end</b>: 키 입력은 X 서버에서 입력기로 직접 가고, 입력기가 조립한 문자열을 클라이언트에 보낸다. 연결이 둘이라 동기화 문제가 있지만 프로세스 전환은 적다.</li>
+<li><b>back-end</b>: 연결은 하나이고, 클라이언트 쪽에서 키를 입력기에 넘겨준다. 통신·프로세스 전환이 더 많다(같은 기계에서 키 하나당 전환 두 번).</li>
+</ul>
+<p>어느 쪽이든 클라이언트는 네트워크 라이브러리를 직접 쓸 필요 없이 <code>XIM</code> 객체만 다루면 된다. 입력 서버가 여러 언어를 지원하더라도, 돌려받는 문자열은 항상 <code>XIM</code>에 묶인 <b>하나의 로캘</b>로 인코딩된다.</p>
+
+<h4>입력 문맥(XIC)과 포커스</h4>
+<p><b>입력 문맥</b> <code>XIC</code>는 입력 "흐름" 하나의 상태다. 입력 방법, 돌려줄 문자열의 로캘, 클라이언트 창, 내부 상태, 모양 설정 등을 묶은 것으로, 출력의 GC에 대응하는 개념이라고 보면 된다. XIC 하나는 정확히 하나의 XIM에 속하며, <code>XCloseIM</code> 뒤에는 거기 속한 XIC를 쓰면 안 된다(가능하면 먼저 없앤다). 입력란이 여러 개라면 입력란마다 XIC를 하나씩 만들 수도, 최상위 창에 하나만 만들고 입력란을 옮길 때마다 문맥 값을 바꿀 수도 있다.</p>
+<p>응용 안에서 포커스가 어떤 입력란으로 오면 <code>XSetICFocus</code>, 나가면 <code>XUnsetICFocus</code>를 부른다. 서로 다른 두 XIC에 연달아 <code>XSetICFocus</code>를 부르면 앞의 것은 자동으로 해제된다. 이 "응용 수준의 포커스"는 X 서버의 포커스와 반드시 같지는 않으므로 응용이 직접 추적해야 한다.</p>
+
+<h4>기하 관리와 이벤트 걸러내기 (개념)</h4>
+<p>off-the-spot처럼 입력기 영역을 응용 창 안에 넣을 때는 역할 분담이 원칙이다: <b>창의 위치·크기는 클라이언트가, 내용은 입력기가</b> 책임진다. 입력기는 크기를 제안만 할 수 있고, 위치는 제안할 수 없으며, 주어진 크기를 받아들여야 한다. 협상 순서는 ① 클라이언트가 <code>XNAreaNeeded</code>로 제약을 제안 ② <code>XNAreaNeeded</code>를 읽어 입력기의 희망 크기를 받음 ③ <code>XNArea</code>로 실제 영역을 알려 줌이다. <code>XNFontSet</code>, <code>XNLineSpace</code>를 바꾸면 희망 크기가 바뀔 수 있으니 다시 협상해야 한다.</p>
+<p>입력기는 키 이벤트나 자기 창의 Expose, 입력 서버와의 통신용 이벤트 등을 클라이언트 몰래 가로채야 한다. 그래서 Xlib은 <b>이벤트 필터</b>를 두고, 클라이언트는 모든 이벤트를 <code>XFilterEvent</code>에 먼저 넘겨야 한다. 또 XIC 값 <code>XNFilterEvents</code>로 입력기가 필요로 하는 이벤트 마스크를 받아 자기 창의 이벤트 마스크에 더해야 한다(0일 수도 있다).</p>
+
+<h4>콜백, 문자열 변환, 핫키, 미리 편집 상태 (요약)</h4>
+<p>on-the-spot에서는 조합 중 글자를 응용이 직접 그려야 하므로, 입력기가 <code>XmbLookupString</code> 처리 도중 응용에 "이 글자를 그려라"라고 <b>되부르는(callback)</b> 구조가 된다. 이 밖에 상태 표시 콜백, 기하 변경 요청 콜백도 있다. 긴 미리 편집 문자열 중 꼭 보여야 할 부분을 알려 주는 <b>가시 위치 피드백 마스크</b>도 있다.</p>
+<p><b>문자열 변환(string conversion)</b>은 이미 응용 버퍼에 있는 텍스트를 입력기가 다루게 하는 틀이다. 예: 이미 쳐 놓은 한글을 한자로 바꾸기(음역 변환), 확정된 문자열을 다시 변환하기(재변환), 태국어처럼 커서 주변 글자를 보고 입력을 검사하는 문맥 의존 변환. 클라이언트가 요청하는 <code>XNStringConversion</code>과, 입력기가 필요할 때 클라이언트에 텍스트를 달라고 부르는 <code>XNStringConversionCallback</code> 두 방식이 있다.</p>
+<p><b>핫키(<code>XNHotKey</code>)</b>는 입력기 상태와 관계없이 응용이 가로챌 키(도움말 키, 포커스 이동 키 등)를 지정하는 기능이고, <b>미리 편집 상태(<code>XNPreeditState</code>)</b>는 조합 기능이 켜져 있는지(<code>XIMPreeditEnable</code>/<code>XIMPreeditDisable</code>)를 읽고 바꾸는 기능이다. 이것들은 모두 선택 기능이라, 쓰기 전에 <code>XGetIMValues(im, XNQueryICValuesList, ...)</code>로 지원 여부를 확인해야 한다.</p>
+
+<h4>입력 방법 관리 (Input Method Management)</h4>
+<p>X 서버, 입력 서버, 클라이언트가 제각각 시작되면, 클라이언트가 입력 서버보다 먼저 떠서 연결에 실패할 수 있다. 입력 서버가 중간에 죽거나 바뀔 수도 있다. 이를 위해 다음이 마련돼 있다.</p>
+<ul>
+<li><code>XRegisterIMInstantiateCallback</code>: 맞는 입력 서버가 나타나면 불릴 콜백을 등록한다. 콜백 안에서 <code>XOpenIM</code>을 부르면 된다.</li>
+<li><code>XNDestroyCallback</code>(IM/IC 값): 입력 서버가 사라질 때 불린다.</li>
+<li><code>XUnregisterIMInstantiateCallback</code>: 등록 해제.</li>
+</ul>
+
+<h4>13.5.2 입력 방법 함수</h4>
+<pre><code>XIM    XOpenIM(Display *display, XrmDatabase db, char *res_name, char *res_class);
+Status XCloseIM(XIM im);
+char  *XSetIMValues(XIM im, ...);
+char  *XGetIMValues(XIM im, ...);
+Display *XDisplayOfIM(XIM im);
+char  *XLocaleOfIM(XIM im);</code></pre>
+<ul>
+<li><code>XOpenIM</code>: 현재 로캘과 수식자(<code>@im=</code>)에 맞는 입력 방법을 연다. 로캘은 여는 순간 고정되므로, 이후 <code>XmbLookupString</code>이 돌려주는 문자열은 <b>열 때의 로캘</b>로 인코딩된다. <code>db</code>, <code>res_name</code>, <code>res_class</code>의 의미는 <code>XOpenOM</code>과 같다(보통 모두 <code>NULL</code>). 실패하면 <code>NULL</code>.</li>
+<li><code>XSetIMValues</code>: 성공하면 <code>NULL</code>, 실패하면 설정 못 한 첫 인자 이름. 그 뒤 인자는 시도하지 않으며, 앞의 인자들은 이미 설정된 상태다.</li>
+<li><code>XGetIMValues</code>: 각 값 인자는 "저장할 곳의 포인터"여야 한다(값 타입이 T면 T*). T가 포인터 타입이면 Xlib이 메모리를 할당하고 <b>클라이언트가 <code>XFree</code></b>로 해제한다.</li>
+</ul>
+<pre><code>Bool XRegisterIMInstantiateCallback(Display *display, XrmDatabase db,
+        char *res_name, char *res_class, XIMProc callback, XPointer *client_data);
+Bool XUnregisterIMInstantiateCallback(Display *display, XrmDatabase db,
+        char *res_name, char *res_class, XIMProc callback, XPointer *client_data);
+
+/* 콜백 모양 */
+void IMInstantiateCallback(Display *display, XPointer client_data, XPointer call_data);
+/* call_data 는 항상 NULL */</code></pre>
+
+<h4>13.5.3 입력 방법 값 (XIM values)</h4>
+<table>
+<tr><th>XIM 값</th><th>키</th><th>설명</th></tr>
+<tr><td><code>XNQueryInputStyle</code></td><td>G</td><td>지원하는 입력 스타일 목록(<code>XIMStyles *</code>). 반드시 먼저 조회해야 한다. <code>XFree</code>로 해제.</td></tr>
+<tr><td><code>XNResourceName</code>, <code>XNResourceClass</code></td><td>D-S-G</td><td>리소스 조회용 이름·클래스 접두어</td></tr>
+<tr><td><code>XNDestroyCallback</code></td><td>D-S-G</td><td>입력 방법이 서비스를 멈출 때 불린다. 그 뒤 Xlib이 IM을 닫고 IC들을 없애므로, 클라이언트는 <code>XCloseIM</code>/<code>XDestroyIC</code>를 부르면 <b>안 된다</b>.</td></tr>
+<tr><td><code>XNQueryIMValuesList</code>, <code>XNQueryICValuesList</code></td><td>G</td><td>지원하는 IM/IC 값 이름 목록(<code>XIMValuesList</code>). <code>XFree</code>로 해제.</td></tr>
+<tr><td><code>XNVisiblePosition</code></td><td>G</td><td>가시 위치 마스크 사용 여부(<code>Bool</code>)</td></tr>
+<tr><td><code>XNR6PreeditCallback</code></td><td>D-S-G</td><td>폐기됨. 쓰지 않는다(R5/R6 콜백 동작 차이를 위한 값이었으나 나중에 동작이 통일됨).</td></tr>
+</table>
+<p>(D=기본값 있음, S=설정 가능, G=읽기 가능)</p>
+<pre><code>typedef unsigned long XIMStyle;
+#define XIMPreeditArea      0x0001L
+#define XIMPreeditCallbacks 0x0002L
+#define XIMPreeditPosition  0x0004L
+#define XIMPreeditNothing   0x0008L
+#define XIMPreeditNone      0x0010L
+#define XIMStatusArea       0x0100L
+#define XIMStatusCallbacks  0x0200L
+#define XIMStatusNothing    0x0400L
+#define XIMStatusNone       0x0800L
+
+typedef struct {
+    unsigned short count_styles;
+    XIMStyle      *supported_styles;
+} XIMStyles;</code></pre>
+<p><code>supported_styles</code>의 각 원소는 "미리 편집 쪽 하나 | 상태 쪽 하나"의 조합이며, 목록에 있는 조합<b>만</b> 지원된다. 뜻은 다음과 같다.</p>
+<ul>
+<li><code>XIMPreeditArea</code>/<code>XIMStatusArea</code>: 클라이언트가 영역(<code>XNArea</code>, <code>XNAreaNeeded</code>)을 줘야 한다.</li>
+<li><code>XIMPreeditPosition</code>: 클라이언트가 위치(<code>XNSpotLocation</code>, <code>XNFocusWindow</code>)를 줘야 한다.</li>
+<li><code>XIMPreeditCallbacks</code>/<code>XIMStatusCallbacks</code>: 클라이언트가 콜백 집합을 줘야 한다.</li>
+<li><code>XIMPreeditNothing</code>/<code>XIMStatusNothing</code>: 클라이언트가 아무것도 안 줘도 동작한다. <b>가장 쉬운 선택</b>이다.</li>
+<li><code>XIMPreeditNone</code>/<code>XIMStatusNone</code>: 피드백 자체가 없다. 다른 값과 함께 쓸 수 없다.</li>
+</ul>
+<p>클라이언트는 자기가 감당할 수 있는 스타일을 찾고, 없으면 사용자와 협의(종료, 다른 입력기 선택 등)해야 한다.</p>
+
+<h4>13.5.4 입력 문맥 함수</h4>
+<pre><code>XIC  XCreateIC(XIM im, ...);
+void XDestroyIC(XIC ic);
+void XSetICFocus(XIC ic);
+void XUnsetICFocus(XIC ic);
+char    *XmbResetIC(XIC ic);
+wchar_t *XwcResetIC(XIC ic);
+XIM  XIMOfIC(XIC ic);
+char *XSetICValues(XIC ic, ...);
+char *XGetICValues(XIC ic, ...);</code></pre>
+<ul>
+<li><code>XCreateIC</code>: 입력 문맥을 만든다. <b>필수 인자</b>는 입력 스타일(<code>XNInputStyle</code>)과, 콜백 스타일을 골랐다면 그 콜백들이다. 나머지는 나중에 설정해도 된다. 필수 인자 누락, 읽기 전용 인자(<code>XNFilterEvents</code> 등) 설정, 모르는 이름, 입력기 내부 오류 때 <code>NULL</code>을 돌려준다. <code>BadAtom</code>, <code>BadColor</code>, <code>BadPixmap</code>, <code>BadWindow</code> 오류가 날 수 있다.</li>
+<li><code>XSetICFocus</code>/<code>XUnsetICFocus</code>: 이 문맥의 포커스 창이 키보드 포커스를 얻었다/잃었다고 입력기에 알린다. 포커스 창 값(<code>XNFocusWindow</code>) 자체는 바꾸지 않는다. 포커스를 잃은 뒤에도 그 창으로 입력기 이벤트가 올 수 있다.</li>
+<li><code>XmbResetIC</code>: 입력 문맥을 초기화하고 조합 중이던 글자를 지운다. <code>XNResetState</code>가 <code>XIMInitialState</code>(기본)면 처음 상태로, <code>XIMPreserveState</code>면 현재 상태를 유지한다. 조합 중이던 문자열을 돌려주며(보이는 조합 글자가 있었다면 반드시 <code>NULL</code>이 아님), <code>XFree</code>로 해제한다. 포커스는 바꾸지 않는다.</li>
+<li><code>XSetICValues</code>/<code>XGetICValues</code>: 성공 시 <code>NULL</code>, 실패 시 첫 실패 인자 이름. <code>XGetICValues</code>의 포인터 규칙은 <code>XGetIMValues</code>와 같다. 단, 미리 편집·상태 속성처럼 <code>XVaNestedList</code> 타입의 값은 인자도 <code>XVaNestedList</code>로 넘기고, 그 안의 각 원소에 T→T* 규칙을 적용한다.</li>
+</ul>
+<div class="tip">한글 입력 중(예: "하"에서 "한"으로 조합 중)에 사용자가 마우스로 다른 위치를 클릭하면, 조합 중 글자를 어떻게 할지 정해야 한다. 이럴 때 <code>XmbResetIC</code>(또는 <code>Xutf8ResetIC</code>)를 불러 조합 중 문자열을 받아 직접 삽입하거나 버린다. 부르지 않으면 조합 글자가 새 위치로 따라오는 현상이 생긴다.</div>
+
+<h4>13.5.5 입력 문맥 값 (XIC values)</h4>
+<p>원문의 두 표(미리 편집용, 상태용)는 각 값이 스타일별로 필수(C), 생성 시 설정 가능(D), 설정 가능(S), 읽기 가능(G), 한 번만 설정(O), 기하 협상을 일으킴(GN) 등인지 정리한다. 실무에서 중요한 것만 추린다.</p>
+<table>
+<tr><th>XIC 값</th><th>타입</th><th>설명</th></tr>
+<tr><td><code>XNInputStyle</code></td><td><code>XIMStyle</code></td><td>생성 시 필수, 변경 불가. <code>XNQueryInputStyle</code> 목록 중 하나여야 함.</td></tr>
+<tr><td><code>XNClientWindow</code></td><td><code>Window</code></td><td>입력기가 그리거나 자식 창을 만들 창. <b>단 한 번만</b> 설정 가능하며, 입력 전에 설정해야 한다. 두 번째 설정 시도는 실패(이름 반환).</td></tr>
+<tr><td><code>XNFocusWindow</code></td><td><code>Window</code></td><td>조합된 키 이벤트를 받을 창. 생략하면 클라이언트 창. 입력기가 이 창에 이벤트 선택, 이벤트 전송, 속성 변경, 키보드 잡기를 할 수 있다.</td></tr>
+<tr><td><code>XNFilterEvents</code></td><td><code>unsigned long</code></td><td>읽기 전용. 입력기가 필요한 이벤트 마스크.</td></tr>
+<tr><td><code>XNResetState</code></td><td><code>XIMResetState</code></td><td><code>XIMInitialState</code>(기본) / <code>XIMPreserveState</code></td></tr>
+<tr><td><code>XNPreeditState</code></td><td><code>XIMPreeditState</code></td><td><code>XIMPreeditEnable</code> / <code>XIMPreeditDisable</code> / <code>XIMPreeditUnknown</code></td></tr>
+<tr><td><code>XNPreeditAttributes</code>, <code>XNStatusAttributes</code></td><td>중첩 목록</td><td>아래 속성들을 묶어 넘김</td></tr>
+<tr><td>└ <code>XNArea</code></td><td><code>XRectangle *</code></td><td>Position 스타일에서는 미리 편집의 잘라내기 영역(포커스 창 기준), Area 스타일에서는 입력기에 준 영역(클라이언트 창 기준)</td></tr>
+<tr><td>└ <code>XNAreaNeeded</code></td><td><code>XRectangle *</code></td><td>기하 협상용 희망 크기</td></tr>
+<tr><td>└ <code>XNSpotLocation</code></td><td><code>XPoint *</code></td><td>Position 스타일 전용. x는 다음 글자가 들어갈 위치, y는 현재 줄의 기준선. 포커스 창(없으면 클라이언트 창) 기준.</td></tr>
+<tr><td>└ <code>XNFontSet</code></td><td><code>XFontSet</code></td><td>입력기가 쓸 폰트 세트</td></tr>
+<tr><td>└ <code>XNForeground</code>, <code>XNBackground</code>, <code>XNColormap</code>, <code>XNBackgroundPixmap</code>, <code>XNLineSpace</code>, <code>XNCursor</code></td><td>각각</td><td>모양 설정</td></tr>
+<tr><td>└ <code>XNPreeditStartCallback</code> 등</td><td><code>XIMCallback *</code></td><td>콜백 스타일 전용</td></tr>
+</table>
+<pre><code>typedef void (*XIMProc)();
+typedef struct {
+    XPointer client_data;
+    XIMProc  callback;
+} XIMCallback;</code></pre>
+<p>미리 편집 콜백은 <code>XNPreeditStartCallback</code>(시작), <code>XNPreeditDoneCallback</code>(끝), <code>XNPreeditDrawCallback</code>(조합 글자 그리기), <code>XNPreeditCaretCallback</code>(조합 문자열 안 커서 이동) 넷, 상태 콜백은 <code>XNStatusStartCallback</code>, <code>XNStatusDoneCallback</code>, <code>XNStatusDrawCallback</code> 셋이다. 조합 중에 이 값들을 바꾸면 결과를 예측할 수 없다.</p>
+
+<h4>13.5.6 입력 방법 콜백의 의미 (요약)</h4>
+<p>자주 쓰지 않아 요약만 한다. 대부분의 응용은 툴킷을 쓰므로 직접 콜백을 정의할 일이 드물고, 이 절은 주로 툴킷 구현자를 위한 것이다. 모든 콜백은 다음 공통 모양을 따른다.</p>
+<pre><code>void CallbackPrototype(XIC ic, XPointer client_data, SomeType call_data);</code></pre>
+<ul>
+<li><b>Geometry 콜백</b>: 입력기가 기하 재협상을 원할 때.</li>
+<li><b>Destroy 콜백</b>: 입력기가 사라질 때(<code>call_data</code>는 <code>NULL</code>).</li>
+<li><b>String conversion 콜백</b>: 입력기가 응용 버퍼의 텍스트를 요청할 때. 커서 기준 위치·길이와 복사/삭제 여부(<code>XIMStringConversionPosition</code>, <code>XIMStringConversionOperation</code>)를 받는다.</li>
+<li><b>Preedit state notify 콜백</b>: 미리 편집 켜짐/꺼짐이 바뀔 때.</li>
+<li><b>PreeditStart/Done</b>: 조합 시작·끝. Start는 Done이 불리기 전에는 다시 불리지 않는다.</li>
+<li><b>PreeditDraw</b>: 조합 글자를 삽입·삭제·교체해 그리라는 요청. 다음 구조체를 받는다.</li>
+</ul>
+<pre><code>typedef struct _XIMPreeditDrawCallbackStruct {
+    int      caret;       /* 조합 문자열 안의 커서 위치 */
+    int      chg_first;   /* 바뀌는 부분의 시작(글자 단위) */
+    int      chg_length;  /* 바뀌는 길이(글자 수) */
+    XIMText *text;        /* 새 텍스트(NULL이면 삭제만) */
+} XIMPreeditDrawCallbackStruct;</code></pre>
+<ul>
+<li><b>PreeditCaret</b>: 조합 문자열 안에서 커서를 옮기라는 요청.</li>
+<li><b>StatusStart/Done/Draw</b>: 문맥이 생기거나 포커스를 얻을 때 Start, 없어지거나 포커스를 잃을 때 Done, 상태 표시 갱신이 필요할 때 Draw.</li>
+</ul>
+
+<h4>13.5.7 이벤트 걸러내기 (Event Filtering)</h4>
+<pre><code>Bool XFilterEvent(XEvent *event, Window w);</code></pre>
+<p><b>목적</b>: 이벤트를 입력기 필터에 먼저 보여 준다. <code>XNextEvent</code> 직후에 부른다.</p>
+<ul>
+<li><code>w</code>: 필터를 적용할 창. <code>None</code>이면 이벤트 구조체 안의 창을 쓴다. 이벤트를 다른 창으로 돌려 보내는 상위 계층(툴킷)을 위해 있는 인자다.</li>
+<li><code>True</code>면 입력기가 이벤트를 가져갔으니 <b>클라이언트는 그 이벤트를 버린다</b>. <code>False</code>면 평소처럼 처리한다.</li>
+<li>클라이언트가 grab 중이었는데 <code>True</code>가 나오면 키보드 grab을 풀어야 한다.</li>
+</ul>
+<div class="tip">XIM을 쓰는 프로그램이 <code>XFilterEvent</code>를 빼먹으면, 입력기 창이 나타나지 않거나 한글이 전혀 조합되지 않는다. 또 <code>True</code>가 나온 KeyPress를 계속 처리하면 "ㅎ"과 "한"이 둘 다 들어가는 식의 중복 입력이 생긴다.</div>
+
+<h4>13.5.8 키보드 입력 받기 (Getting Keyboard Input)</h4>
+<pre><code>int XmbLookupString(XIC ic, XKeyPressedEvent *event, char *buffer_return,
+                    int bytes_buffer, KeySym *keysym_return, Status *status_return);
+int XwcLookupString(XIC ic, XKeyPressedEvent *event, wchar_t *buffer_return,
+                    int wchars_buffer, KeySym *keysym_return, Status *status_return);
+/* libX11 확장: Xutf8LookupString 은 XmbLookupString 과 같은 모양, 결과가 UTF-8 */</code></pre>
+<p><b>목적</b>: 입력기가 조립한 문자열(그리고/또는 KeySym)을 받는다. 11장의 <code>XLookupString</code>의 국제화판이다.</p>
+<ul>
+<li>반환값: <code>Xmb</code>는 바이트 수, <code>Xwc</code>는 글자 수. 문자열은 <b>널 문자로 끝나지 않으므로</b> 직접 붙여야 한다.</li>
+<li><code>keysym_return</code>: <code>NULL</code>이 아니고 상태가 KeySym을 돌려줬다고 할 때만 유효. 문자열과 KeySym을 같이 받았을 때 둘이 반드시 대응하지는 않는다.</li>
+<li><b>KeyPress 이벤트만 넘긴다.</b> KeyRelease를 넘기면 동작이 정의되지 않는다.</li>
+<li>입력 문맥이 지금 포커스를 갖고 있는지는 상관없다. 포커스를 잃기 전에 조립된 입력이 나중에 나올 수 있다.</li>
+</ul>
+<p><code>status_return</code> 값을 먼저 보고 나머지를 써야 한다.</p>
+<table>
+<tr><th>status</th><th>뜻</th></tr>
+<tr><td><code>XBufferOverflow</code></td><td>버퍼가 작다. 필요한 크기가 반환값으로 오며, 버퍼와 KeySym은 바뀌지 않는다. <b>같은 이벤트</b>로 더 큰 버퍼를 주고 다시 부른다.</td></tr>
+<tr><td><code>XLookupNone</code></td><td>아직 완성된 입력이 없다(조합 중). 반환값 0.</td></tr>
+<tr><td><code>XLookupChars</code></td><td>문자열이 왔다. KeySym은 바뀌지 않는다.</td></tr>
+<tr><td><code>XLookupKeySym</code></td><td>문자열 대신 KeySym만 왔다(화살표, F1 등). 반환값 0.</td></tr>
+<tr><td><code>XLookupBoth</code></td><td>문자열과 KeySym이 둘 다 왔다.</td></tr>
+</table>
+
+<h4>13.5.9 입력 방법 관례 (Input Method Conventions)</h4>
+<ul>
+<li><b>클라이언트 관례</b>: 잘 만든 클라이언트는 먼저 입력 스타일을 조회하고, 요구 사항(기하 관리, 콜백)을 감당할 수 없으면 사용자와 협의하거나 오류를 낸다.</li>
+<li><b>동기화 관례</b>: KeyCode가 <b>0</b>인 KeyPress 이벤트는 "입력기가 조립한 입력이 준비됐으니 <code>XmbLookupString</code>으로 가져가라"는 신호로만 쓰인다. 입력 서버가 보낸 합성 이벤트, 필터가 큐에 넣은 이벤트 등으로 생긴다. 그러니 "KeyCode 0은 쓸모없는 이벤트"라며 버리면 안 된다.</li>
+<li>콜백을 지정했다면, 입력기는 클라이언트를 명시적으로 불렀는데 응답이 없을 때(콜백 미지정, 잘못된 데이터)만 스스로 행동한다.</li>
+</ul>
+
+<h4>예제: 가장 단순한 XIM 입력 (Xutf8LookupString)</h4>
+<pre><code>/* cc xim.c -lX11 ;  LANG=ko_KR.UTF-8 XMODIFIERS=@im=ibus ./a.out */
+#include &lt;locale.h&gt;
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;X11/Xlib.h&gt;
+#include &lt;X11/Xutil.h&gt;
+#include &lt;X11/keysym.h&gt;
+
+int main(void)
+{
+    setlocale(LC_ALL, "");
+    if (!XSupportsLocale()) { fprintf(stderr, "locale not supported\n"); return 1; }
+    if (!XSetLocaleModifiers("")) fprintf(stderr, "cannot set modifiers\n");
+
+    Display *dpy = XOpenDisplay(NULL);
+    if (!dpy) return 1;
+    int scr = DefaultScreen(dpy);
+    Window win = XCreateSimpleWindow(dpy, RootWindow(dpy, scr), 0, 0, 300, 100, 1,
+                                     BlackPixel(dpy, scr), WhitePixel(dpy, scr));
+
+    /* 1) 입력 방법 열기. 실패하면 내장 입력(@im=none)으로 재시도 */
+    XIM im = XOpenIM(dpy, NULL, NULL, NULL);
+    if (!im) {
+        XSetLocaleModifiers("@im=none");
+        im = XOpenIM(dpy, NULL, NULL, NULL);
+    }
+    if (!im) { fprintf(stderr, "XOpenIM failed\n"); return 1; }
+
+    /* 2) 지원 스타일 중 PreeditNothing|StatusNothing 찾기 */
+    XIMStyles *styles = NULL;
+    XIMStyle want = XIMPreeditNothing | XIMStatusNothing, style = 0;
+    if (XGetIMValues(im, XNQueryInputStyle, &amp;styles, NULL) == NULL &amp;&amp; styles) {
+        for (int i = 0; i &lt; styles-&gt;count_styles; i++)
+            if (styles-&gt;supported_styles[i] == want) style = want;
+        XFree(styles);
+    }
+    if (!style) style = XIMPreeditNone | XIMStatusNone;   /* 차선책 */
+
+    /* 3) 입력 문맥 만들기 */
+    XIC ic = XCreateIC(im, XNInputStyle, style,
+                       XNClientWindow, win,
+                       XNFocusWindow, win,
+                       NULL);
+    if (!ic) { fprintf(stderr, "XCreateIC failed\n"); return 1; }
+
+    /* 4) 입력기가 원하는 이벤트를 내 마스크에 더하기 */
+    unsigned long fevents = 0;
+    XGetICValues(ic, XNFilterEvents, &amp;fevents, NULL);
+    XSelectInput(dpy, win, ExposureMask | KeyPressMask | FocusChangeMask | fevents);
+    XMapWindow(dpy, win);
+
+    char sbuf[64], *buf = sbuf;
+    int bufsize = sizeof sbuf;
+    for (;;) {
+        XEvent ev;
+        XNextEvent(dpy, &amp;ev);
+        if (XFilterEvent(&amp;ev, None)) continue;          /* 입력기가 가져감 */
+
+        if (ev.type == FocusIn)  XSetICFocus(ic);
+        if (ev.type == FocusOut) XUnsetICFocus(ic);
+        if (ev.type != KeyPress) continue;
+
+        KeySym ks = NoSymbol;
+        Status st;
+        int len = Xutf8LookupString(ic, &amp;ev.xkey, buf, bufsize - 1, &amp;ks, &amp;st);
+        if (st == XBufferOverflow) {                     /* 큰 버퍼로 재시도 */
+            bufsize = len + 1;
+            buf = (buf == sbuf) ? malloc(bufsize) : realloc(buf, bufsize);
+            len = Xutf8LookupString(ic, &amp;ev.xkey, buf, bufsize - 1, &amp;ks, &amp;st);
+        }
+        if (st == XLookupChars || st == XLookupBoth) {
+            buf[len] = '\0';                             /* 널로 끝나지 않으니 직접 */
+            printf("입력: %s\n", buf);
+        }
+        if ((st == XLookupKeySym || st == XLookupBoth) &amp;&amp; ks == XK_Escape)
+            break;
+    }
+    XDestroyIC(ic);          /* IC 먼저, IM 나중 */
+    XCloseIM(im);
+    XCloseDisplay(dpy);
+    return 0;
+}</code></pre>
+<div class="tip"><b>점검 목록</b>
+<ul>
+<li><code>XOpenIM</code>이 <code>NULL</code>: 로캘이 "C"이거나, <code>XMODIFIERS</code>가 가리키는 입력 서버가 떠 있지 않은 경우가 대부분이다. 위 예제처럼 <code>@im=none</code>으로 재시도하면 최소한 영문·compose 입력은 된다. 입력 서버가 나중에 뜰 수 있는 환경이면 <code>XRegisterIMInstantiateCallback</code>을 쓴다.</li>
+<li>한글이 조합되지 않음: <code>XFilterEvent</code> 누락, <code>XNFilterEvents</code> 마스크 누락, <code>XSetICFocus</code> 누락을 차례로 확인한다.</li>
+<li>Over-the-spot(<code>XIMPreeditPosition</code>)을 쓰면 커서가 움직일 때마다 <code>XNPreeditAttributes</code> 중첩 목록으로 <code>XNSpotLocation</code>을 갱신해야 입력 창이 커서를 따라온다(13.3의 예 참고).</li>
+<li><code>XNClientWindow</code>는 한 번만 설정할 수 있다. 창을 바꾸려면 IC를 새로 만든다.</li>
+</ul></div>
+
+<h3>13.6 문자열 상수 (String Constants)</h3>
+<p><code>&lt;X11/Xlib.h&gt;</code>에는 이 장에서 쓰는 이름 상수가 정의돼 있다. 매크로일 수도 전역 기호일 수도 있으며, 포인터 값 자체는 의미가 없다. 즉 두 상수의 포인터가 달라도 문자열 내용은 같을 수 있으니 <code>==</code>로 비교하지 말고 필요하면 <code>strcmp</code>를 쓴다. 몇 가지 예:</p>
+<pre><code>#define XNVaNestedList        "XNVaNestedList"
+#define XNQueryInputStyle     "queryInputStyle"
+#define XNClientWindow        "clientWindow"
+#define XNInputStyle          "inputStyle"
+#define XNFocusWindow         "focusWindow"
+#define XNFilterEvents        "filterEvents"
+#define XNPreeditAttributes   "preeditAttributes"
+#define XNStatusAttributes    "statusAttributes"
+#define XNSpotLocation        "spotLocation"
+#define XNFontSet             "fontSet"
+#define XNResetState          "resetState"
+#define XNPreeditState        "preeditState"
+#define XNBaseFontName        "baseFontName"
+#define XNMissingCharSet      "missingCharSet"
+#define XNDefaultString       "defaultString"
+#define XNOMAutomatic         "omAutomatic"
+/* ... 원문에는 XIM/XIC/XOM/XOC 값 이름이 모두 나열돼 있다 */</code></pre>
+</section><div class="pager"><a href="ch12.html">← 12장. 입력 장치 함수 (Input Device Functions)</a><a href="./">차례</a><a href="ch14.html">14장. 클라이언트 간 통신 함수 (Inter-Client Communication Functions) →</a></div>
+<a class="top" href="#">↑ 위로</a>
+</html>

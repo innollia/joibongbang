@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>14장. 클라이언트 간 통신 함수 (Inter-Client Communication Functions) — Xlib 한국어</title>
+<style>
+body{font:16px/1.75 system-ui,"Malgun Gothic",sans-serif;max-width:860px;margin:40px auto;padding:0 16px;background:#111;color:#e8e8e8}
+a{color:#7cf} h1{line-height:1.3} h2{margin-top:3em;border-bottom:1px solid #444;padding-bottom:.3em} h2 small{color:#999;font-weight:normal;font-size:.6em}
+h3{margin-top:2em;color:#fd8} h4{color:#9df}
+code{font-family:ui-monospace,Consolas,monospace;font-size:.92em;background:#222;padding:1px 4px;border-radius:3px}
+pre{background:#1b1d22;border:1px solid #333;padding:12px;overflow-x:auto;border-radius:6px;line-height:1.45} pre code{background:none;padding:0}
+.tip{background:#1d2a1d;border-left:4px solid #6c6;padding:8px 12px;margin:1em 0;border-radius:4px}
+table{border-collapse:collapse;margin:1em 0;font-size:.92em;display:block;overflow-x:auto} td,th{border:1px solid #444;padding:4px 8px;vertical-align:top} th{background:#222}
+nav ol{columns:2} .top{position:fixed;right:16px;bottom:16px;background:#333;padding:6px 10px;border-radius:6px;text-decoration:none}
+.pager{display:flex;justify-content:space-between;gap:12px;margin:2em 0;padding-top:1em;border-top:1px solid #444} .pager a{text-decoration:none}
+</style>
+<p><a href="../../">← 조이봉방</a> · <a href="./">Xlib 번역 차례</a></p><div class="pager"><a href="ch13.html">← 13장. 로캘과 국제화 텍스트 함수 (Locales and Internationalized Text Functions)</a><a href="./">차례</a><a href="ch15.html">15장. 리소스 관리자 함수 (Resource Manager Functions) →</a></div><section id="ch14"><h2 style="margin-top:1em">14장. 클라이언트 간 통신 함수 <small>(Inter-Client Communication Functions)</small></h2>
+
+<p>X에는 여러 프로그램이 한 화면을 함께 쓴다. 이들이 서로 부딪히지 않게 하는 약속이 ICCCM(Inter-Client Communication Conventions Manual)이다. ICCCM은 selection, cut buffer, 공유 자원을 쓰는 방법과 창 관리자·세션 관리자와 협조하는 방법을 정한다. 이 장의 함수들은 그 약속에 맞게 속성(property)을 쓰고 읽게 도와준다.</p>
+<p>핵심 생각은 이렇다. 앱은 창 관리자에게 직접 함수 호출을 하지 않는다. 대신 자기 최상위 창에 정해진 이름의 속성을 붙여 둔다. 창 관리자는 그 속성을 읽고 제목 표시, 크기 제한, 아이콘 등을 결정한다. 그래서 이 장 대부분은 "어떤 속성을 어떤 구조체로 쓰고 읽는가"에 대한 이야기다. 미리 정의된 atom은 <code>&lt;X11/Xatom.h&gt;</code>에 <code>XA_</code> 접두사로 들어 있다(예: <code>XA_WM_NAME</code>). 앱끼리 데이터를 주고받는 selection(4.5절)과 cut buffer(16.6절)는 다른 장에서 다루고, 이 장은 창·세션 관리자와의 통신과 표준 컬러맵 공유를 다룬다.</p>
+
+<table>
+<tr><th>속성 이름</th><th>타입</th><th>format</th><th>뜻</th></tr>
+<tr><td>WM_CLASS</td><td>STRING</td><td>8</td><td>앱의 이름과 클래스. 리소스 DB에서 설정을 찾을 때 쓴다.</td></tr>
+<tr><td>WM_CLIENT_MACHINE</td><td>TEXT</td><td></td><td>앱이 실행 중인 기계 이름.</td></tr>
+<tr><td>WM_COLORMAP_WINDOWS</td><td>WINDOW</td><td>32</td><td>최상위 창과 다른 컬러맵이 필요할 수 있는 창 목록.</td></tr>
+<tr><td>WM_COMMAND</td><td>TEXT</td><td></td><td>앱을 실행한 명령과 인자(널 문자로 구분).</td></tr>
+<tr><td>WM_HINTS</td><td>WM_HINTS</td><td>32</td><td>창 관리자용 추가 힌트. C 타입 <code>XWMHints</code>.</td></tr>
+<tr><td>WM_ICON_NAME</td><td>TEXT</td><td></td><td>아이콘에 쓸 이름.</td></tr>
+<tr><td>WM_ICON_SIZE</td><td>WM_ICON_SIZE</td><td>32</td><td>창 관리자가 루트 창에 붙여 지원하는 아이콘 크기를 알림. C 타입 <code>XIconSize</code>.</td></tr>
+<tr><td>WM_NAME</td><td>TEXT</td><td></td><td>앱(창)의 이름. 보통 제목 표시줄에 나온다.</td></tr>
+<tr><td>WM_NORMAL_HINTS</td><td>WM_SIZE_HINTS</td><td>32</td><td>보통 상태일 때의 크기 힌트. C 타입 <code>XSizeHints</code>.</td></tr>
+<tr><td>WM_PROTOCOLS</td><td>ATOM</td><td>32</td><td>앱이 참여하겠다는 창 관리자 프로토콜 목록.</td></tr>
+<tr><td>WM_STATE</td><td>WM_STATE</td><td>32</td><td>창 관리자와 세션 관리자 사이 전용.</td></tr>
+<tr><td>WM_TRANSIENT_FOR</td><td>WINDOW</td><td>32</td><td>이 최상위 창이 대화상자 같은 임시 창임을 알림.</td></tr>
+</table>
+
+<h3>14.1 클라이언트와 창 관리자 사이의 통신 <small>(Client to Window Manager Communication)</small></h3>
+
+<h4>14.1.1 최상위 창 다루기</h4>
+<p>최상위 창(루트 창의 자식)의 보이기·크기를 바꿀 때 쓰는 함수다. 창 관리자는 내가 만든 하위 창(subwindow)은 신경 쓰지 않으므로, 하위 창은 3장의 기본 창 함수로 다루면 된다. 최상위 창은 창 관리자가 가로챌 수 있으므로 "요청"을 보내는 방식이 된다.</p>
+<pre><code>Status XIconifyWindow(Display *display, Window w, int screen_number);
+Status XWithdrawWindow(Display *display, Window w, int screen_number);
+Status XReconfigureWMWindow(Display *display, Window w, int screen_number,
+                            unsigned int value_mask, XWindowChanges *values);</code></pre>
+<ul>
+<li><code>XIconifyWindow</code>: 창을 아이콘으로 만들어 달라고 요청한다. 실제로는 WM_CHANGE_STATE 타입, format 32, 첫 데이터가 <code>IconicState</code>이고 window가 w인 <code>ClientMessage</code>를 해당 화면 루트 창에 <code>SubstructureNotifyMask | SubstructureRedirectMask</code>로 보낸다. 창 관리자가 이를 받아 보통 상태의 창을 아이콘 상태로 바꿀 수 있다. WM_CHANGE_STATE atom을 만들 수 없으면 보내지 않고 0을 돌려준다. 보내기에 성공하면 0이 아닌 값을 돌려준다.</li>
+<li><code>XWithdrawWindow</code>: 창을 unmap하고 루트 창에 합성 <code>UnmapNotify</code>를 보내 "withdrawn 상태로 바꿔 달라"고 알린다. withdrawn 상태에서는 창도 아이콘도 보이지 않는다. 이벤트를 보내면 0이 아닌 값을 돌려준다. <code>BadWindow</code> 오류 가능.</li>
+<li><code>XReconfigureWMWindow</code>: 최상위 창에 <code>ConfigureWindow</code> 요청을 보낸다. 쌓임 순서(stacking)를 바꾸려다 <code>BadMatch</code>가 나면(창 관리자가 창을 다른 창 안에 넣어 둔 경우 흔함) Xlib이 오류를 가로채고 같은 내용의 합성 <code>ConfigureRequest</code> 이벤트를 루트로 보낸다. 창 관리자는 이를 재배치 요청으로 처리할 수 있다. <code>BadValue</code>, <code>BadWindow</code> 오류 가능.</li>
+</ul>
+<div class="tip">보통 상태로 되돌리기(de-iconify)는 별도 함수가 없고 <code>XMapWindow</code>를 부르면 된다. 창 관리자가 있으면 <code>XMoveWindow</code> 등의 결과도 "요청"일 뿐이라 그대로 따라 줄지는 창 관리자가 정한다.</div>
+
+<h4>14.1.2 문자열 목록 변환 (<code>XTextProperty</code>)</h4>
+<p>텍스트 속성은 단순한 C 문자열이 아니다. 인코딩(STRING, COMPOUND_TEXT, 로케일 인코딩 등)과 format, 길이가 함께 있어야 한다. 그래서 이를 담는 구조체를 쓴다.</p>
+<pre><code>typedef struct {
+    unsigned char *value;   /* 속성 데이터 */
+    Atom encoding;          /* 속성 타입 */
+    int format;             /* 8, 16, 32 */
+    unsigned long nitems;   /* value의 항목 수 */
+} XTextProperty;
+
+typedef enum {
+    XStringStyle,       /* STRING */
+    XCompoundTextStyle, /* COMPOUND_TEXT */
+    XTextStyle,         /* 현재 로케일 인코딩 */
+    XStdICCTextStyle    /* STRING으로 되면 STRING, 아니면 COMPOUND_TEXT */
+} XICCEncodingStyle;</code></pre>
+<p>로케일 텍스트용 함수는 정수 상태값을 돌려준다. <code>Success</code>(0)는 성공, 음수는 오류(<code>XNoMemory</code> -1, <code>XLocaleNotSupported</code> -2, <code>XConverterNotFound</code> -3), 양수는 변환하지 못한 문자 수(부분 변환)다.</p>
+
+<pre><code>int XmbTextListToTextProperty(Display *display, char **list, int count,
+                              XICCEncodingStyle style, XTextProperty *text_prop_return);
+int XwcTextListToTextProperty(Display *display, wchar_t **list, int count,
+                              XICCEncodingStyle style, XTextProperty *text_prop_return);</code></pre>
+<p>현재 로케일의 문자열 목록(멀티바이트 또는 wchar_t)을 하나의 <code>XTextProperty</code>로 바꾼다. 각 문자열은 널 문자로 구분되어 이어 붙는다. 맨 끝에 널이 하나 더 저장되지만 nitems에는 포함되지 않는다. encoding은 style에 따라 정해진다. 메모리가 부족하면 <code>XNoMemory</code>, 로케일이 지원되지 않으면 <code>XLocaleNotSupported</code>를 돌려주며 이때 결과를 채우지 않는다(<code>XSupportsLocale</code>로 미리 확인 가능). 완전히 바꾸지 못한 문자가 있으면 그 수를 돌려주고, 그런 문자는 구현이 정한 기본 문자열로 바뀐다. <code>XStringStyle</code>을 제외한 모든 style은 완전 변환이 보장된다. value는 <code>XFree</code>로 해제한다.</p>
+
+<pre><code>int XmbTextPropertyToTextList(Display *display, XTextProperty *text_prop,
+                              char ***list_return, int *count_return);
+int XwcTextPropertyToTextList(Display *display, XTextProperty *text_prop,
+                              wchar_t ***list_return, int *count_return);
+void XwcFreeStringList(wchar_t **list);
+char *XDefaultString(void);</code></pre>
+<p>반대 방향으로, 속성을 현재 로케일의 문자열 목록으로 바꾼다. text_prop은 format 8이어야 한다. 여러 원소는 널 바이트로 구분되며, 끝 널은 nitems에 포함하지 않는다. 메모리 부족 <code>XNoMemory</code>, 로케일 미지원 <code>XLocaleNotSupported</code>, 인코딩을 현재 로케일로 바꿀 변환기가 없으면 <code>XConverterNotFound</code>이고, 이런 오류 때는 아무 반환값도 채우지 않는다. 지원되는 로케일에서는 COMPOUND_TEXT, STRING, 현재 로케일 인코딩에서의 변환기가 반드시 있다. 바꾸지 못한 문자는 로케일별 문자열로 바뀌며 그 문자열은 <code>XDefaultString</code>으로 알 수 있다. 결과 목록은 Mb 쪽은 <code>XFreeStringList</code>, Wc 쪽은 <code>XwcFreeStringList</code>로 해제한다.</p>
+<p><code>XDefaultString</code>은 변환할 수 없는 문자 자리에 넣는 문자열을 돌려준다. 빈 문자열이면 아무것도 넣지 않는다. NULL을 돌려주지 않으며, Xlib 소유이므로 고치거나 해제하면 안 된다(로케일이 바뀌면 해제될 수 있음). 글자 그리기용 <code>XFontSet</code>의 기본 문자열과는 별개다.</p>
+
+<pre><code>Status XStringListToTextProperty(char **list, int count, XTextProperty *text_prop_return);
+Status XTextPropertyToStringList(XTextProperty *text_prop, char ***list_return,
+                                 int *count_return);
+void XFreeStringList(char **list);</code></pre>
+<p>로케일과 무관하게 STRING(Latin-1) 인코딩만 다루는 단순한 버전이다. <code>XStringListToTextProperty</code>는 문자열들을 STRING 타입, format 8 속성으로 만든다(끝에 nitems에 안 들어가는 널 하나 추가, 인코딩 검사는 하지 않음). 메모리가 부족하면 0을 돌려준다. value는 <code>XFree</code>로 해제한다. <code>XTextPropertyToStringList</code>는 STRING, format 8 속성을 문자열 목록으로 나눈다. 실패하면 0. 결과는 <code>XFreeStringList</code>로 해제한다. <code>XFreeStringList</code>는 <code>XmbTextPropertyToTextList</code>, <code>XTextPropertyToStringList</code>의 결과와 <code>XCreateFontSet</code>의 missing charset 목록을 해제한다.</p>
+<div class="tip">한글 제목처럼 ASCII/Latin-1이 아닌 문자열은 <code>XStringListToTextProperty</code>로 만들면 깨진다(검사 없이 STRING으로 표시하기 때문). <code>setlocale(LC_ALL, "")</code>를 먼저 부른 뒤 <code>XmbTextListToTextProperty</code>에 <code>XStdICCTextStyle</code>이나 <code>XCompoundTextStyle</code>로 만든다. 참고로 요즘 데스크톱 창 관리자는 UTF-8 제목을 위해 별도의 _NET_WM_NAME 속성을 읽는데, 이는 ICCCM 밖의 규약이라 이 문서 범위는 아니다.</div>
+
+<h4>14.1.3 텍스트 속성 쓰고 읽기</h4>
+<pre><code>void XSetTextProperty(Display *display, Window w, XTextProperty *text_prop, Atom property);
+Status XGetTextProperty(Display *display, Window w, XTextProperty *text_prop_return,
+                        Atom property);</code></pre>
+<p>TEXT 타입 속성(WM_NAME, WM_ICON_NAME, WM_COMMAND, WM_CLIENT_MACHINE)을 쓰고 읽는 일반 함수다. <code>XSetTextProperty</code>는 value, encoding, format, nitems를 그대로 데이터·타입·format·항목 수로 해서 속성을 바꾸거나 새로 만든다(<code>BadAlloc</code>, <code>BadAtom</code>, <code>BadValue</code>, <code>BadWindow</code>). <code>XGetTextProperty</code>는 속성을 읽어 구조체에 채운다. value 끝에는 nitems에 안 들어가는 널이 하나 붙는다. 데이터를 어떻게 텍스트로 해석할지는 호출한 쪽 몫이다. 속성이 없으면 value=NULL, encoding=<code>None</code>, format=0, nitems=0으로 채운다. 성공하면 0이 아닌 값을 돌려준다. 각 속성마다 아래의 편의 함수가 따로 있다.</p>
+
+<h4>14.1.4 WM_NAME, 14.1.5 WM_ICON_NAME</h4>
+<pre><code>void   XSetWMName(Display *display, Window w, XTextProperty *text_prop);
+Status XGetWMName(Display *display, Window w, XTextProperty *text_prop_return);
+       XStoreName(Display *display, Window w, char *window_name);
+Status XFetchName(Display *display, Window w, char **window_name_return);
+
+void   XSetWMIconName(Display *display, Window w, XTextProperty *text_prop);
+Status XGetWMIconName(Display *display, Window w, XTextProperty *text_prop_return);
+       XSetIconName(Display *display, Window w, char *icon_name);
+Status XGetIconName(Display *display, Window w, char **icon_name_return);</code></pre>
+<p><code>XSetWMName</code>/<code>XGetWMName</code>는 WM_NAME에 대해 <code>XSetTextProperty</code>/<code>XGetTextProperty</code>를 부른다. WM_NAME은 창 관리자가 제목 표시줄 같은 눈에 띄는 곳에 보여 주는 이름이다(일부 창 관리자는 아이콘에도 쓰지만, 아이콘 이름이 있으면 그것을 쓰도록 권장된다).</p>
+<p><code>XStoreName</code>/<code>XFetchName</code>는 예전 함수로, STRING으로 인코딩된 이름에 쓸 수 있다. 문자열이 Host Portable Character Encoding(기본 ASCII 부분집합)이 아니면 결과는 구현에 따라 다르다. <code>XFetchName</code>은 이름이 없으면 0을 돌려주고 *window_name_return을 NULL로 만든다. 얻은 문자열은 <code>XFree</code>로 해제한다.</p>
+<p>WM_ICON_NAME 쪽도 똑같은 구조다. <code>XGetIconName</code>으로 얻은 문자열도 <code>XFree</code>로 해제한다.</p>
+<pre><code>XStoreName(d, w, "My App");            /* ASCII 제목이면 이것으로 충분 */
+XSetIconName(d, w, "myapp");
+
+char *name;
+if (XFetchName(d, w, &amp;name) &amp;&amp; name) {
+    printf("title = %s\n", name);
+    XFree(name);
+}</code></pre>
+
+<h4>14.1.6 WM_HINTS (<code>XWMHints</code>)</h4>
+<pre><code>XWMHints *XAllocWMHints(void);
+          XSetWMHints(Display *display, Window w, XWMHints *wmhints);
+XWMHints *XGetWMHints(Display *display, Window w);
+
+/* flags 비트 */
+InputHint StateHint IconPixmapHint IconWindowHint IconPositionHint
+IconMaskHint WindowGroupHint UrgencyHint
+AllHints  /* = InputHint|StateHint|IconPixmapHint|IconWindowHint|
+                IconPositionHint|IconMaskHint|WindowGroupHint */
+
+typedef struct {
+    long flags;          /* 아래 필드 중 어떤 것이 유효한지 */
+    Bool input;          /* 키 입력을 위해 창 관리자에 의존하는가? */
+    int initial_state;   /* 처음 상태 */
+    Pixmap icon_pixmap;  /* 아이콘 그림 */
+    Window icon_window;  /* 아이콘으로 쓸 창 */
+    int icon_x, icon_y;  /* 아이콘 처음 위치 */
+    Pixmap icon_mask;    /* icon_pixmap의 마스크 */
+    XID window_group;    /* 관련 창 그룹 id */
+} XWMHints;</code></pre>
+<p><code>XAllocWMHints</code>는 모든 필드가 0인 구조체를 할당해 돌려준다(메모리 부족 시 NULL, 해제는 <code>XFree</code>). flags에 켠 비트에 해당하는 필드만 의미가 있다.</p>
+<ul>
+<li><b><code>input</code></b>: 앱의 포커스 모델을 알린다. 키 입력을 받지만 스스로 하위 창에 포커스를 주지 않는 앱(push 모델, 예: 포인터 위치로 포커스를 정하는 X10식 앱)과, 창 관리자가 최상위 창에 포커스를 줄 때만 하위 창에 포커스를 넘기는 앱은 <code>True</code>. 원할 때 스스로 하위 창에 포커스를 가져가는 앱(pull 모델)과 키 입력을 아예 받지 않는 앱은 <code>False</code>. pull 모델 창 관리자는 input이 True인 앱의 최상위 창에 포커스를 줘서 입력을 받게 해야 하고, push 모델 창 관리자는 input이 False인 앱이 하위 창에 포커스를 줄 때 같은 적절한 때에 포커스를 <code>PointerRoot</code>로 되돌려 서로 망가뜨리지 않게 해야 한다.</li>
+<li><b><code>initial_state</code></b>: <code>WithdrawnState</code>(0), <code>NormalState</code>(1, 대부분의 앱), <code>IconicState</code>(3, 아이콘으로 시작).</li>
+<li><b><code>icon_pixmap</code>, <code>icon_mask</code></b>: 둘 다 비트맵(깊이 1)이어야 한다. mask는 pixmap 중 어떤 픽셀을 아이콘으로 쓸지 정해 사각형이 아닌 아이콘을 가능하게 한다.</li>
+<li><b><code>icon_window</code></b>: 이를 지원하는 창 관리자에게 아이콘으로 쓸 창을 준다.</li>
+<li><b><code>window_group</code></b>: 이 창이 어떤 창 그룹에 속하는지 알린다. 한 앱이 최상위 창을 여럿 쓸 때, 창 관리자가 하나만이 아니라 그룹 전체를 아이콘화할 수 있게 한다.</li>
+<li><b><code>UrgencyHint</code></b>: flags에 켜면 "급하니 사용자가 빨리 봐야 한다"는 뜻이다. 창 관리자는 깜빡임 등으로 주의를 끈다. 앱은 사용자가 이 상태를 끌 수단(원인 해결이나 알림 끄기, 또는 창 withdraw)을 제공해야 한다.</li>
+</ul>
+<p><code>XSetWMHints</code>는 WM_HINTS를 설정한다(<code>BadAlloc</code>, <code>BadWindow</code>). <code>XGetWMHints</code>는 읽어서 새 구조체를 돌려주고 속성이 없으면 NULL을 돌려준다. 다 쓰면 <code>XFree</code>. 원문에서 <code>AllHints</code>는 위 일곱 비트의 합이고 <code>UrgencyHint</code>는 포함하지 않는다.</p>
+<pre><code>XWMHints *wmh = XAllocWMHints();
+wmh-&gt;flags = InputHint | StateHint;
+wmh-&gt;input = True;                 /* 창 관리자가 포커스를 주면 받겠다 */
+wmh-&gt;initial_state = NormalState;
+XSetWMHints(d, w, wmh);
+XFree(wmh);
+
+/* 나중에 알림이 생기면 */
+XWMHints *h = XGetWMHints(d, w);
+if (h) { h-&gt;flags |= UrgencyHint; XSetWMHints(d, w, h); XFree(h); }</code></pre>
+<div class="tip">키보드 입력을 받는 앱인데 <code>input</code>을 False로 두거나 WM_HINTS를 아예 안 쓰면, 일부 창 관리자에서는 창을 클릭해도 키 입력이 안 들어간다. 입력을 받는 앱은 <code>InputHint</code>와 <code>input = True</code>를 꼭 설정한다.</div>
+
+<h4>14.1.7 WM_NORMAL_HINTS (<code>XSizeHints</code>)</h4>
+<pre><code>XSizeHints *XAllocSizeHints(void);
+void   XSetWMNormalHints(Display *display, Window w, XSizeHints *hints);
+Status XGetWMNormalHints(Display *display, Window w, XSizeHints *hints_return,
+                         long *supplied_return);
+void   XSetWMSizeHints(Display *display, Window w, XSizeHints *hints, Atom property);
+Status XGetWMSizeHints(Display *display, Window w, XSizeHints *hints_return,
+                       long *supplied_return, Atom property);
+
+/* flags 비트 (값은 &lt;X11/Xutil.h&gt; 참고) */
+USPosition  /* 사용자가 정한 x,y */      USSize   /* 사용자가 정한 너비,높이 */
+PPosition   /* 프로그램이 정한 위치 */  PSize    /* 프로그램이 정한 크기 */
+PMinSize PMaxSize PResizeInc PAspect PBaseSize PWinGravity
+PAllHints   /* 사용을 강력히 말림 */
+
+typedef struct {
+    long flags;
+    int x, y;                  /* 쓰지 않음(호환용) */
+    int width, height;         /* 쓰지 않음(호환용) */
+    int min_width, min_height;
+    int max_width, max_height;
+    int width_inc, height_inc;
+    struct { int x; int y; } min_aspect, max_aspect;  /* 분자/분모 */
+    int base_width, base_height;
+    int win_gravity;
+} XSizeHints;</code></pre>
+<p>창 크기에 대한 희망을 창 관리자에게 알린다.</p>
+<ul>
+<li><code>x, y, width, height</code>: 이제는 쓰지 않으며 호환을 위해 남아 있다. 실제 위치·크기는 창을 만들 때 준 값이 쓰이고, flags의 <code>USPosition</code>/<code>PPosition</code> 등은 "그 값이 사용자가 정한 것인지 프로그램이 정한 것인지"를 알리는 데 쓴다. 창 관리자는 보통 사용자가 정한(US) 위치를 존중한다.</li>
+<li><code>min_*</code>: 앱이 쓸모 있는 최소 크기. <code>max_*</code>: 최대 크기.</li>
+<li><code>width_inc, height_inc</code>: 크기가 이 간격으로만 바뀌길 바란다(최소부터 최대까지의 등차수열). 터미널이 글자 칸 단위로 크기가 바뀌는 것이 이것이다.</li>
+<li><code>min_aspect, max_aspect</code>: 가로/세로 비율(x/y)의 허용 범위.</li>
+<li><code>base_width, base_height</code>: 원하는 기본 크기. width_inc와 함께 "base + n×inc" 꼴로 크기를 계산한다.</li>
+<li><code>win_gravity</code>: 창 관리자가 테두리·장식을 포함한 바깥 사각형의 어느 점을 기준으로 위치를 잡을지 정한다. 창 관리자가 클라이언트가 원한 곳에 놓기로 했다면, 바깥 사각형에서 win_gravity가 가리키는 점이 "창 관리자가 없었다면 클라이언트 창이 놓였을 자리"에 오게 된다. 예를 들어 <code>SouthEastGravity</code>면 오른쪽 아래 모서리가 기준이 된다.</li>
+</ul>
+<p>원문은 이 구조체가 앞으로 커질 수 있으므로, 정적(전역·지역 변수) 인스턴스를 넘기면 미래 버전 라이브러리에서 메모리 손상이 날 수 있으니 <code>XAllocSizeHints</code>로 동적 할당한 것만 쓰라고 권한다(<code>XAllocSizeHints</code>는 모든 필드를 0으로 채움, 해제는 <code>XFree</code>).</p>
+<p><code>XSetWMNormalHints</code>는 WM_NORMAL_HINTS를 타입 WM_SIZE_HINTS, format 32로 저장한다. <code>XGetWMNormalHints</code>는 속성이 WM_SIZE_HINTS 타입·format 32이고 옛(ICCCM 이전) 또는 새 구조를 담을 만큼 길면 구조체를 채우고, supplied_return에 실제로 공급된 필드 목록을 넣고, 0이 아닌 값을 돌려준다. 옛 형식이면 supplied_return은 <code>USPosition|USSize|PPosition|PSize|PMinSize|PMaxSize|PResizeInc|PAspect</code>이고, base size와 gravity까지 담을 만큼 길면 <code>PBaseSize|PWinGravity</code>도 들어간다. <code>XSetWMSizeHints</code>/<code>XGetWMSizeHints</code>는 같은 일을 임의의 속성 이름에 대해 한다(보통은 Normal 쪽만 쓰면 된다).</p>
+<pre><code>/* 크기 고정 창: 최소 = 최대 */
+XSizeHints *sh = XAllocSizeHints();
+sh-&gt;flags = PMinSize | PMaxSize;
+sh-&gt;min_width  = sh-&gt;max_width  = 320;
+sh-&gt;min_height = sh-&gt;max_height = 240;
+XSetWMNormalHints(d, w, sh);
+XFree(sh);</code></pre>
+<div class="tip">힌트는 말 그대로 "부탁"이다. 창 관리자가 무시할 수 있으므로, 앱은 <code>ConfigureNotify</code>로 실제 크기를 받아 거기에 맞춰 그려야 한다. 또 힌트는 창을 map하기 전에 설정해야 첫 배치에 반영된다.</div>
+
+<h4>14.1.8 WM_CLASS (<code>XClassHint</code>)</h4>
+<pre><code>XClassHint *XAllocClassHint(void);
+       XSetClassHint(Display *display, Window w, XClassHint *class_hints);
+Status XGetClassHint(Display *display, Window w, XClassHint *class_hints_return);
+
+typedef struct {
+    char *res_name;    /* 앱 이름 */
+    char *res_class;   /* 앱 클래스 */
+} XClassHint;</code></pre>
+<p>WM_CLASS는 리소스 데이터베이스에서 이 앱의 설정을 찾을 때 쓰는 공식 이름이다. WM_NAME과 다를 수 있다. WM_NAME은 제목 표시줄용이라 "편집 중인 파일 이름"처럼 수시로 바뀌는 정보가 들어갈 수 있지만, WM_CLASS는 고정된 이름이다. 예: res_name="xterm", res_class="XTerm". <code>XAllocClassHint</code>는 포인터 필드가 NULL인 구조체를 돌려준다. <code>XGetClassHint</code>로 받은 res_name과 res_class는 각각 따로 <code>XFree</code>로 해제한다.</p>
+
+<h4>14.1.9 WM_TRANSIENT_FOR</h4>
+<pre><code>       XSetTransientForHint(Display *display, Window w, Window prop_window);
+Status XGetTransientForHint(Display *display, Window w, Window *prop_window_return);</code></pre>
+<p>w가 prop_window에 딸린 임시 창(대화상자 등)임을 알린다. 창 관리자는 보통 이런 창에 장식을 줄이고, 주인 창 위에 띄우며, 주인 창을 아이콘화할 때 함께 숨긴다.</p>
+
+<h4>14.1.10 WM_PROTOCOLS</h4>
+<pre><code>Status XSetWMProtocols(Display *display, Window w, Atom *protocols, int count);
+Status XGetWMProtocols(Display *display, Window w, Atom **protocols_return,
+                       int *count_return);</code></pre>
+<p><code>XSetWMProtocols</code>는 WM_PROTOCOLS 속성을 주어진 atom 목록으로 바꾼다(타입 ATOM, format 32). WM_PROTOCOLS atom을 만들 수 없으면 0을 돌려준다. <code>XGetWMProtocols</code>는 목록을 읽어 돌려주며, 받은 목록은 <code>XFree</code>로 해제한다. 이 atom들은 창 주인이 참여하겠다는 창 관리자 프로토콜을 뜻한다.</p>
+<p>가장 중요한 프로토콜이 ICCCM에 정의된 <b>WM_DELETE_WINDOW</b>다(프로토콜 자체의 정의는 ICCCM 문서에 있고, 이 장은 속성을 쓰는 함수만 제공한다). 사용자가 제목 표시줄의 닫기 버튼을 눌렀을 때, 앱이 이 프로토콜에 참여하지 않으면 창 관리자는 보통 <code>XKillClient</code> 같은 방법으로 연결을 강제로 끊는다. 그러면 앱은 "X connection broken" 같은 오류로 갑자기 죽고, 저장하지 않은 데이터도 잃는다. 참여하면 창 관리자는 대신 <code>ClientMessage</code> 이벤트를 보내 주고, 앱은 그것을 받아 정리하고 스스로 끝낼 수 있다.</p>
+
+<h4>예제: WM_DELETE_WINDOW로 깔끔하게 닫기</h4>
+<pre><code>/* close.c : cc close.c -lX11 */
+#include &lt;X11/Xlib.h&gt;
+#include &lt;X11/Xutil.h&gt;
+#include &lt;stdio.h&gt;
+
+int main(void)
+{
+    Display *d = XOpenDisplay(NULL);
+    if (!d) return 1;
+    int s = DefaultScreen(d);
+    Window w = XCreateSimpleWindow(d, RootWindow(d, s), 0, 0, 300, 200, 1,
+                                   BlackPixel(d, s), WhitePixel(d, s));
+
+    Atom wm_protocols = XInternAtom(d, "WM_PROTOCOLS", False);
+    Atom wm_delete    = XInternAtom(d, "WM_DELETE_WINDOW", False);
+    XSetWMProtocols(d, w, &amp;wm_delete, 1);     /* map 전에 설정 */
+
+    XStoreName(d, w, "Close me");
+    XSelectInput(d, w, ExposureMask | KeyPressMask);
+    XMapWindow(d, w);
+
+    int running = 1;
+    while (running) {
+        XEvent ev;
+        XNextEvent(d, &amp;ev);
+        switch (ev.type) {
+        case ClientMessage:
+            /* ClientMessage는 XSelectInput 없이도 온다 */
+            if (ev.xclient.message_type == wm_protocols &amp;&amp;
+                ev.xclient.format == 32 &amp;&amp;
+                (Atom)ev.xclient.data.l[0] == wm_delete) {
+                printf("closing...\n");   /* 저장 확인 등을 여기서 */
+                running = 0;
+            }
+            break;
+        case KeyPress:
+            running = 0;
+            break;
+        }
+    }
+    XDestroyWindow(d, w);
+    XCloseDisplay(d);
+    return 0;
+}</code></pre>
+<div class="tip">함정: ClientMessage를 받았을 때 <code>message_type</code>이 WM_PROTOCOLS인지와 <code>data.l[0]</code>이 WM_DELETE_WINDOW인지 둘 다 확인한다. 다른 ClientMessage(다른 프로토콜, 드래그 앤 드롭 등)도 같은 이벤트 타입으로 오기 때문이다. 메시지를 받았다고 창이 자동으로 닫히지는 않는다. 앱이 직접 <code>XDestroyWindow</code>나 종료를 해야 한다. 끝내지 않기로 했다면(예: "저장할까요?"에서 취소) 그냥 무시하면 된다.</div>
+
+<h4>14.1.11 WM_COLORMAP_WINDOWS</h4>
+<pre><code>Status XSetWMColormapWindows(Display *display, Window w, Window *colormap_windows, int count);
+Status XGetWMColormapWindows(Display *display, Window w, Window **colormap_windows_return,
+                             int *count_return);</code></pre>
+<p>최상위 창과 다른 컬러맵을 쓰는 하위 창 목록을 창 관리자에게 알린다(타입 WINDOW, format 32). 창 관리자는 이 목록을 보고 필요한 컬러맵을 설치(install)할 수 있다. atom을 만들 수 없으면 0을 돌려준다. 읽은 목록은 <code>XFree</code>로 해제한다. 오늘날 대부분의 TrueColor 화면에서는 쓸 일이 드물다.</p>
+
+<h4>14.1.12 WM_ICON_SIZE</h4>
+<pre><code>XIconSize *XAllocIconSize(void);
+       XSetIconSizes(Display *display, Window w, XIconSize *size_list, int count);
+Status XGetIconSizes(Display *display, Window w, XIconSize **size_list_return,
+                     int *count_return);
+
+typedef struct {
+    int min_width, min_height;
+    int max_width, max_height;
+    int width_inc, height_inc;
+} XIconSize;</code></pre>
+<p>방향이 반대인 속성이다. 창 관리자가 루트 창에 <code>XSetIconSizes</code>로 "이런 아이콘 크기를 지원한다"고 적어 두면(최소~최대, inc 간격), 앱은 <code>XGetIconSizes</code>로 읽어 그 크기의 아이콘을 만든 뒤 <code>XSetWMHints</code>로 넘긴다. <code>XGetIconSizes</code>는 창 관리자가 크기를 정하지 않았으면 0을 돌려준다. 결과는 <code>XFree</code>로 해제한다.</p>
+
+<h4>14.1.13 창 관리자 편의 함수</h4>
+<pre><code>void XmbSetWMProperties(Display *display, Window w, char *window_name, char *icon_name,
+                        char *argv[], int argc, XSizeHints *normal_hints,
+                        XWMHints *wm_hints, XClassHint *class_hints);
+
+void XSetWMProperties(Display *display, Window w, XTextProperty *window_name,
+                      XTextProperty *icon_name, char **argv, int argc,
+                      XSizeHints *normal_hints, XWMHints *wm_hints,
+                      XClassHint *class_hints);</code></pre>
+<p>표준 창 관리자 속성을 한 번에 설정한다. 각 인자가 NULL이 아닐 때만 해당 속성을 설정한다.</p>
+<ul>
+<li>window_name → WM_NAME, icon_name → WM_ICON_NAME</li>
+<li>argv/argc → WM_COMMAND (<code>XSetWMProperties</code>는 <code>XSetCommand</code>를 부름). argc가 0이면 길이 0인 명령.</li>
+<li>이 기계의 호스트 이름 → WM_CLIENT_MACHINE (<code>XSetWMClientMachine</code>)</li>
+<li>normal_hints → WM_NORMAL_HINTS, wm_hints → WM_HINTS, class_hints → WM_CLASS</li>
+</ul>
+<p>class_hints의 res_name이 NULL이면, 환경 변수 RESOURCE_NAME이 있으면 그 값을, 없고 argv[0]이 있으면 디렉터리 부분을 뺀 argv[0]을 res_name으로 쓴다.</p>
+<p>둘의 차이는 이름 문자열의 형식이다. <code>XmbSetWMProperties</code>는 현재 로케일 인코딩의 일반 C 문자열을 받아, STRING으로 완전히 바꿀 수 있으면 STRING 타입으로, 아니면 COMPOUND_TEXT로 바꿔 저장한다. 또 현재 로케일 이름을 WM_LOCALE_NAME 속성에 저장한다. WM_CLASS, WM_COMMAND, WM_CLIENT_MACHINE은 인코딩 변환 없이 로케일에 맞는 타입으로 저장된다. <code>XSetWMProperties</code>는 이미 만든 <code>XTextProperty</code>를 받는다. 둘 다 <code>BadAlloc</code>, <code>BadWindow</code> 오류가 날 수 있다.</p>
+<pre><code>/* 보통 앱의 표준 초기화 */
+#include &lt;locale.h&gt;
+setlocale(LC_ALL, "");
+...
+XSizeHints *sh = XAllocSizeHints();
+sh-&gt;flags = PMinSize;
+sh-&gt;min_width = 200; sh-&gt;min_height = 100;
+
+XWMHints *wmh = XAllocWMHints();
+wmh-&gt;flags = InputHint | StateHint;
+wmh-&gt;input = True;
+wmh-&gt;initial_state = NormalState;
+
+XClassHint *ch = XAllocClassHint();
+ch-&gt;res_name = NULL;          /* argv[0] 등에서 자동으로 채움 */
+ch-&gt;res_class = "MyApp";
+
+XmbSetWMProperties(d, w, "내 프로그램", "myapp", argv, argc, sh, wmh, ch);
+XFree(sh); XFree(wmh); XFree(ch);
+XMapWindow(d, w);</code></pre>
+
+<h3>14.2 클라이언트와 세션 관리자 사이의 통신 <small>(Client to Session Manager Communication)</small></h3>
+<p>세션 관리자는 로그아웃 때 실행 중인 앱 목록을 기억했다가 다음 로그인 때 다시 띄워 주는 프로그램이다. 이를 위해 "이 앱을 어떻게 실행했는지"와 "어느 기계에서 실행했는지"가 필요하다.</p>
+<pre><code>       XSetCommand(Display *display, Window w, char **argv, int argc);
+Status XGetCommand(Display *display, Window w, char ***argv_return, int *argc_return);
+void   XSetWMClientMachine(Display *display, Window w, XTextProperty *text_prop);
+Status XGetWMClientMachine(Display *display, Window w, XTextProperty *text_prop_return);</code></pre>
+<ul>
+<li><code>XSetCommand</code>: WM_COMMAND에 실행 명령과 인자를 저장한다. 보통 main의 argv를 그대로 넘긴다. 문자열이 Host Portable Character Encoding이 아니면 결과는 구현 의존. <code>BadAlloc</code>, <code>BadWindow</code> 가능.</li>
+<li><code>XGetCommand</code>: WM_COMMAND(STRING, format 8)를 문자열 목록으로 읽는다. 결과는 <code>XFreeStringList</code>로 해제한다. 실패하면 0.</li>
+<li><code>XSetWMClientMachine</code>/<code>XGetWMClientMachine</code>: WM_CLIENT_MACHINE에 대해 <code>XSetTextProperty</code>/<code>XGetTextProperty</code>를 부르는 편의 함수.</li>
+</ul>
+
+<h3>14.3 표준 컬러맵 <small>(Standard Colormaps)</small></h3>
+<p>자주 쓰지 않아 요약 위주로 설명한다. 오늘날 흔한 24비트 TrueColor 화면에서는 거의 필요 없지만, 8비트 PseudoColor 시절에는 중요한 문제였다.</p>
+
+<h4>왜 필요했나</h4>
+<p>부드러운 음영의 3D 그림이나 사진 같은 이미지는 색을 아주 많이 쓴다. 이런 프로그램은 각 픽셀의 RGB 값(0.0~1.0)을 계산한 뒤 빠르게 픽셀 값으로 바꿔야 하므로, 고르게 펼쳐진 색들이 규칙적으로 배치된 컬러맵이 필요하다. 그런데 당시 많은 기계는 256색 이하였고 하드웨어 색 표가 하나뿐이라, 한 번에 컬러맵 하나만 설치할 수 있었다. 이미지 처리 프로그램과 팔레트 프로그램이 각자 8×8×4 컬러맵을 따로 만들면, 한쪽이 활성일 때 다른 쪽은 엉뚱한 색으로 보여 두 화면의 색을 비교할 수 없었다. 같은 배치 규칙을 공유하면 하나의 컬러맵을 같이 써서 둘 다 제대로 보인다. 그 공유 규칙이 표준 컬러맵이다. 보통 창 관리자가 만들고, 앱은 이미 있으면 그것을 쓴다.</p>
+
+<h4><code>XStandardColormap</code></h4>
+<pre><code>XStandardColormap *XAllocStandardColormap(void);
+
+typedef struct {
+    Colormap colormap;
+    unsigned long red_max,   red_mult;
+    unsigned long green_max, green_mult;
+    unsigned long blue_max,  blue_mult;
+    unsigned long base_pixel;
+    VisualID visualid;
+    XID killid;
+} XStandardColormap;</code></pre>
+<ul>
+<li><code>red_max</code> 등: 각 색 성분의 최댓값(0~max). 3/3/2 배치(빨강 3비트, 초록 3비트, 파랑 2비트)면 7, 7, 3이다. 216색만 쓰는 배치는 5, 5, 5다.</li>
+<li><code>red_mult</code> 등: 픽셀 값을 만들 때 곱하는 수. 3/3/2면 32, 4, 1, 6×6×6이면 36, 6, 1 정도다.</li>
+<li><code>base_pixel</code>: 더하는 기본 픽셀 값(보통 <code>XAllocColorPlanes</code>로 얻음).</li>
+</ul>
+<p>정수 r, g, b에서 픽셀 값은 다음과 같이 계산한다.</p>
+<pre><code>pixel = (r * red_mult + g * green_mult + b * blue_mult + base_pixel) &amp; 0xFFFFFFFF;
+/* GrayScale: colormap, red_max, red_mult, base_pixel만 쓴다 */
+pixel = (gray * red_mult + base_pixel) &amp; 0xFFFFFFFF;</code></pre>
+<p>음수 곱셈 값은 2의 보수를 unsigned long으로 저장하고, 0xFFFFFFFF 마스크가 결과를 다시 음수 곱셈처럼 만들어 준다. <code>visualid</code>는 컬러맵을 만든 visual, <code>killid</code>는 이 컬러맵의 셀을 컬러맵을 해제해서 풀지(<code>ReleaseByFreeingColormap</code>) 아니면 그 자원에 <code>XKillClient</code>를 불러 풀지 알려 준다(기존 컬러맵에서 셀을 할당한 경우에 필요한 방식). 이 정보를 담는 속성의 타입은 RGB_COLOR_MAP이다.</p>
+
+<h4>표준 컬러맵 atom</h4>
+<table>
+<tr><th>atom (XA_ 접두사)</th><th>내용</th></tr>
+<tr><td>RGB_DEFAULT_MAP</td><td><code>XStandardColormap</code> 배열. 각 항목은 해당 visual의 기본 컬러맵 안의 RGB 부분집합. 8비트 화면에서는 흔히 6×6×6=216색을 쓰고 40칸을 글자·테두리용으로 남긴다. 몇 가지 색만 필요한 앱에게 가장 좋다(활성 컬러맵이 적을수록 모두 제 색으로 보이므로).</td></tr>
+<tr><td>RGB_BEST_MAP</td><td>그 화면에서 가장 좋은 RGB 컬러맵(주관적 평가). 8비트 PseudoColor에서는 3/3/2, 24비트 DirectColor에서는 보통 8/8/8. 사람 눈이 초록에 민감하므로 초록이 더 많을 수 있다.</td></tr>
+<tr><td>RGB_RED_MAP, RGB_GREEN_MAP, RGB_BLUE_MAP</td><td>빨강만, 초록만, 파랑만 있는 컬러맵. 색 분해 이미지용(세 번 렌더링해 카메라로 다중 노출하는 식).</td></tr>
+<tr><td>RGB_GRAY_MAP</td><td>가장 좋은 GrayScale 컬러맵.</td></tr>
+</table>
+
+<h4>설정과 읽기</h4>
+<pre><code>void   XSetRGBColormaps(Display *display, Window w, XStandardColormap *std_colormap,
+                        int count, Atom property);
+Status XGetRGBColormaps(Display *display, Window w, XStandardColormap **std_colormap_return,
+                        int *count_return, Atom property);</code></pre>
+<p><code>XSetRGBColormaps</code>는 주로 창·세션 관리자가 쓰며, 속성을 RGB_COLOR_MAP 타입, format 32로 저장한다. 여러 항목을 가질 수 있는 것은 RGB_DEFAULT_MAP뿐이라는 ICCCM 제한은 호출하는 쪽이 지켜야 한다. 표준 컬러맵을 만드는 절차는 다음과 같다: 같은 서버에 새 연결을 연다 → 서버를 grab한다 → 루트 창에 그 속성이 이미 있는지 본다 → 없으면 컬러맵을 만들고(기본 컬러맵을 쓰지 않는다면), visual 특성을 알아내고, 셀을 할당하고(또는 <code>AllocAll</code>로 생성), <code>XStoreColors</code>로 색을 넣고, 구조체를 채워 루트 창에 속성을 붙이고, <code>XSetCloseDownMode</code>로 자원을 영구화한다 → 서버 grab을 푼다.</p>
+<p><code>XGetRGBColormaps</code>는 속성을 읽어 배열을 할당해 돌려준다(해제는 <code>XFree</code>). visualid가 없으면 창이 있는 화면의 기본 visual로, killid가 없으면 <code>None</code>(풀 수 없음)으로 본다. 조건이 맞지 않으면 0을 돌려준다.</p>
+<pre><code>XStandardColormap *maps; int n;
+if (XGetRGBColormaps(d, RootWindow(d, s), &amp;maps, &amp;n, XA_RGB_DEFAULT_MAP)) {
+    XStandardColormap *m = &amp;maps[0];
+    unsigned long r = m-&gt;red_max, g = 0, b = 0;      /* 순수한 빨강 */
+    unsigned long px = (r * m-&gt;red_mult + g * m-&gt;green_mult
+                        + b * m-&gt;blue_mult + m-&gt;base_pixel) &amp; 0xFFFFFFFF;
+    XFree(maps);
+}</code></pre>
+</section><div class="pager"><a href="ch13.html">← 13장. 로캘과 국제화 텍스트 함수 (Locales and Internationalized Text Functions)</a><a href="./">차례</a><a href="ch15.html">15장. 리소스 관리자 함수 (Resource Manager Functions) →</a></div>
+<a class="top" href="#">↑ 위로</a>
+</html>

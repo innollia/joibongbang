@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>부록 B. X 폰트 커서 (X Font Cursors) — Xlib 한국어</title>
+<style>
+body{font:16px/1.75 system-ui,"Malgun Gothic",sans-serif;max-width:860px;margin:40px auto;padding:0 16px;background:#111;color:#e8e8e8}
+a{color:#7cf} h1{line-height:1.3} h2{margin-top:3em;border-bottom:1px solid #444;padding-bottom:.3em} h2 small{color:#999;font-weight:normal;font-size:.6em}
+h3{margin-top:2em;color:#fd8} h4{color:#9df}
+code{font-family:ui-monospace,Consolas,monospace;font-size:.92em;background:#222;padding:1px 4px;border-radius:3px}
+pre{background:#1b1d22;border:1px solid #333;padding:12px;overflow-x:auto;border-radius:6px;line-height:1.45} pre code{background:none;padding:0}
+.tip{background:#1d2a1d;border-left:4px solid #6c6;padding:8px 12px;margin:1em 0;border-radius:4px}
+table{border-collapse:collapse;margin:1em 0;font-size:.92em;display:block;overflow-x:auto} td,th{border:1px solid #444;padding:4px 8px;vertical-align:top} th{background:#222}
+nav ol{columns:2} .top{position:fixed;right:16px;bottom:16px;background:#333;padding:6px 10px;border-radius:6px;text-decoration:none}
+.pager{display:flex;justify-content:space-between;gap:12px;margin:2em 0;padding-top:1em;border-top:1px solid #444} .pager a{text-decoration:none}
+</style>
+<p><a href="../../">← 조이봉방</a> · <a href="./">Xlib 번역 차례</a></p><div class="pager"><a href="apA.html">← 부록 A. Xlib 함수와 프로토콜 요청 (Xlib Functions and Protocol Requests)</a><a href="./">차례</a><a href="apC.html">부록 C. 확장 (Extensions) →</a></div><section id="apB"><h2 style="margin-top:1em">부록 B. X 폰트 커서 <small>(X Font Cursors)</small></h2>
+<p><code>XCreateFontCursor</code>에 넘길 수 있는 표준 커서 모양 목록이다. 상수는 <code>&lt;X11/cursorfont.h&gt;</code>에 정의돼 있고, 값은 모두 짝수(0, 2, 4, ... 152)다. 커서 폰트에서 짝수 번호 글리프가 모양이고, 바로 다음 홀수 번호 글리프가 그 마스크이기 때문이다.</p>
+<pre><code>#include &lt;X11/cursorfont.h&gt;
+Cursor c = XCreateFontCursor(dpy, XC_watch);   /* 모래시계(시계) 모양 */
+XDefineCursor(dpy, win, c);
+/* ... 오래 걸리는 작업 ... */
+XUndefineCursor(dpy, win);
+XFreeCursor(dpy, c);</code></pre>
+<p>전체 77개 중 실제로 자주 쓰는 것은 다음과 같다.</p>
+<table>
+<tr><th>상수</th><th>값</th><th>모양·용도</th></tr>
+<tr><td><code>XC_left_ptr</code></td><td>68</td><td>일반 화살표(대부분 데스크톱의 기본 커서)</td></tr>
+<tr><td><code>XC_xterm</code></td><td>152</td><td>I자 모양(텍스트 입력 영역)</td></tr>
+<tr><td><code>XC_watch</code></td><td>150</td><td>기다림</td></tr>
+<tr><td><code>XC_hand1</code>, <code>XC_hand2</code></td><td>58, 60</td><td>손 모양(링크, 끌기)</td></tr>
+<tr><td><code>XC_crosshair</code>, <code>XC_tcross</code>, <code>XC_cross</code></td><td>34, 130, 30</td><td>십자(정밀 선택, 그리기)</td></tr>
+<tr><td><code>XC_fleur</code></td><td>52</td><td>네 방향 화살표(이동)</td></tr>
+<tr><td><code>XC_sb_h_double_arrow</code>, <code>XC_sb_v_double_arrow</code></td><td>108, 116</td><td>좌우·상하 크기 조절</td></tr>
+<tr><td><code>XC_top_left_corner</code>, <code>XC_bottom_right_corner</code> 등</td><td>134, 14 등</td><td>모서리 크기 조절</td></tr>
+<tr><td><code>XC_question_arrow</code></td><td>92</td><td>도움말</td></tr>
+<tr><td><code>XC_pirate</code></td><td>88</td><td>해골(창 강제 종료 xkill 등)</td></tr>
+<tr><td><code>XC_X_cursor</code></td><td>0</td><td>X 모양(루트 창 기본 커서)</td></tr>
+</table>
+<p>그 밖에 <code>XC_arrow</code>, <code>XC_boat</code>, <code>XC_coffee_mug</code>, <code>XC_gumby</code>, <code>XC_heart</code>, <code>XC_spider</code>, <code>XC_trek</code>, <code>XC_umbrella</code>처럼 장난스러운 모양도 들어 있다. 목록은 <code>XC_X_cursor</code>(0)부터 <code>XC_xterm</code>(152)까지다.</p>
+<div class="tip">현대 데스크톱에서는 커서 테마(Xcursor)가 이 이름들을 가로채 테마 그림으로 바꿔 보여 주는 경우가 많다. 그래서 같은 <code>XC_left_ptr</code>이라도 환경마다 모양이 다를 수 있다.</div>
+</section><div class="pager"><a href="apA.html">← 부록 A. Xlib 함수와 프로토콜 요청 (Xlib Functions and Protocol Requests)</a><a href="./">차례</a><a href="apC.html">부록 C. 확장 (Extensions) →</a></div>
+<a class="top" href="#">↑ 위로</a>
+</html>

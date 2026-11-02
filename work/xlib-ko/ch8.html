@@ -1,0 +1,572 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>8장. 그래픽 함수 (Graphics Functions) — Xlib 한국어</title>
+<style>
+body{font:16px/1.75 system-ui,"Malgun Gothic",sans-serif;max-width:860px;margin:40px auto;padding:0 16px;background:#111;color:#e8e8e8}
+a{color:#7cf} h1{line-height:1.3} h2{margin-top:3em;border-bottom:1px solid #444;padding-bottom:.3em} h2 small{color:#999;font-weight:normal;font-size:.6em}
+h3{margin-top:2em;color:#fd8} h4{color:#9df}
+code{font-family:ui-monospace,Consolas,monospace;font-size:.92em;background:#222;padding:1px 4px;border-radius:3px}
+pre{background:#1b1d22;border:1px solid #333;padding:12px;overflow-x:auto;border-radius:6px;line-height:1.45} pre code{background:none;padding:0}
+.tip{background:#1d2a1d;border-left:4px solid #6c6;padding:8px 12px;margin:1em 0;border-radius:4px}
+table{border-collapse:collapse;margin:1em 0;font-size:.92em;display:block;overflow-x:auto} td,th{border:1px solid #444;padding:4px 8px;vertical-align:top} th{background:#222}
+nav ol{columns:2} .top{position:fixed;right:16px;bottom:16px;background:#333;padding:6px 10px;border-radius:6px;text-decoration:none}
+.pager{display:flex;justify-content:space-between;gap:12px;margin:2em 0;padding-top:1em;border-top:1px solid #444} .pager a{text-decoration:none}
+</style>
+<p><a href="../../">← 조이봉방</a> · <a href="./">Xlib 번역 차례</a></p><div class="pager"><a href="ch7.html">← 7장. 그래픽 컨텍스트 함수 (Graphics Context Functions)</a><a href="./">차례</a><a href="ch9.html">9장. 윈도 매니저·세션 매니저 함수 (Window and Session Manager Functions) →</a></div><section id="ch8"><h2 style="margin-top:1em">8장. 그래픽 함수 <small>(Graphics Functions)</small></h2>
+
+<p>디스플레이에 연결하고 창과 GC(7장)를 준비했으면, 이 장의 함수로 실제로 그린다. 다루는 내용은 영역 지우기·복사, 점·선·사각형·호 그리기, 영역 채우기, 폰트 다루기, 글자 그리기, 클라이언트와 서버 사이 이미지 전송이다.</p>
+<p>모든 그리기 함수는 <b>Drawable</b>(창 또는 픽스맵)과 <b>GC</b>를 받는다. 색, 선 굵기, 채우기 방식, 클리핑 같은 "어떻게 그릴지"는 전부 GC에 들어 있고, 함수 인자는 "무엇을 어디에"만 정한다. 각 함수 설명 끝에 "이 함수가 쓰는 GC 요소"를 적어 두었는데, 결과가 이상할 때 어떤 GC 값을 의심해야 할지 알려 주는 목록이다.</p>
+<p>Xlib는 같은 Drawable과 같은 GC로 <code>XDrawPoint</code>, <code>XDrawLine</code>, <code>XDrawRectangle</code>, <code>XFillArc</code>, <code>XFillRectangle</code>을 연달아 부르면 요청을 <b>하나로 묶어</b> 보낸다(batching). 그래서 서버로 가는 요청 수가 줄어든다. 성능이 중요하면 GC를 자주 바꾸지 말고 같은 GC로 몰아서 그리는 것이 좋다.</p>
+<div class="tip">그리기 요청은 Xlib의 출력 버퍼에 쌓였다가 나중에 보내진다. 이벤트 루프에서 <code>XNextEvent</code>를 부르면 자동으로 비워지지만, 그 밖의 곳에서 그리고 바로 보이게 하려면 <code>XFlush</code>를 부른다. 또 창은 처음 <code>Expose</code> 이벤트를 받기 전에 그리면 보통 사라진다. 그리기는 <code>Expose</code> 처리 안에서 하는 것이 원칙이다.</div>
+
+<h3>8.1 영역 지우기 <small>(Clearing Areas)</small></h3>
+<p>창의 일부나 전체를 <b>창의 배경</b>으로 칠한다. 픽스맵에는 정해진 배경이 없으므로 이 함수들을 쓸 수 없다. 픽스맵을 지우려면 <code>XFillRectangle</code>로 원하는 값을 칠한다.</p>
+
+<h4>XClearArea</h4>
+<pre><code>XClearArea(Display *display, Window w, int x, int y,
+           unsigned int width, unsigned int height, Bool exposures);</code></pre>
+<p>창의 사각형 영역을 창의 배경 픽셀 또는 배경 픽스맵으로 칠한다.</p>
+<ul>
+<li><code>x</code>, <code>y</code>: 창 원점 기준 왼쪽 위 모서리.</li>
+<li><code>width</code>가 0이면 "창 너비 − x", <code>height</code>가 0이면 "창 높이 − y"로 바뀐다. 즉 0은 "끝까지"라는 뜻이다.</li>
+<li>subwindow-mode는 사실상 <code>ClipByChildren</code>이라 자식 창 영역은 건드리지 않는다.</li>
+<li>배경이 <code>None</code>이면 창 내용이 바뀌지 않는다.</li>
+<li><code>exposures</code>가 <code>True</code>면 사각형 중 보이는 부분이나 backing store에 보관된 부분에 대해 <code>Expose</code> 이벤트가 생긴다(배경이 <code>None</code>이어도).</li>
+<li><code>InputOnly</code> 창이면 <code>BadMatch</code>.</li>
+</ul>
+<p>오류: <code>BadMatch</code>, <code>BadValue</code>, <code>BadWindow</code>.</p>
+<div class="tip">"이 부분 다시 그려 줘"를 스스로에게 요청하는 간단한 방법이 <code>XClearArea(dpy, win, x, y, w, h, True)</code>다. 지우고 <code>Expose</code>를 발생시키므로, 평소의 <code>Expose</code> 처리 코드가 다시 그린다.</div>
+
+<h4>XClearWindow</h4>
+<pre><code>XClearWindow(Display *display, Window w);</code></pre>
+<p>창 전체를 지운다. <code>XClearArea(display, w, 0, 0, 0, 0, False)</code>와 같다. 배경 타일이 있으면 plane-mask 전부 1, <code>GXcopy</code> 함수로 타일링한다. 배경이 <code>None</code>이면 변화 없음. <code>InputOnly</code> 창이면 <code>BadMatch</code>. 오류: <code>BadMatch</code>, <code>BadWindow</code>.</p>
+
+<h3>8.2 영역 복사 <small>(Copying Areas)</small></h3>
+<h4>XCopyArea</h4>
+<pre><code>XCopyArea(Display *display, Drawable src, Drawable dest, GC gc,
+          int src_x, int src_y, unsigned int width, unsigned int height,
+          int dest_x, int dest_y);</code></pre>
+<p><code>src</code>의 사각형을 <code>dest</code>의 사각형과 결합한다(GC의 function이 <code>GXcopy</code>면 그냥 복사). 더블 버퍼링(픽스맵에 그린 뒤 창으로 복사)과 스크롤에 쓰는 핵심 함수다.</p>
+<ul>
+<li>두 Drawable은 <b>루트와 깊이가 같아야</b> 한다. 아니면 <code>BadMatch</code>.</li>
+<li><code>width</code>, <code>height</code>는 원본·대상 사각형 공통 크기다.</li>
+<li>원본 영역 중 다른 창에 가려져 있고 backing store에도 없는 부분, 또는 원본 경계 밖 부분은 <b>복사되지 않는다</b>. 대신 대응하는 대상 영역 중 보이거나 backing store에 있는 부분에 대해: 대상이 배경이 <code>None</code>이 아닌 창이면 그 배경으로 칠해지고, graphics-exposures가 <code>True</code>면(창이든 픽스맵이든) <code>GraphicsExpose</code> 이벤트가 생긴다. graphics-exposures가 <code>True</code>인데 <code>GraphicsExpose</code>가 하나도 안 생기면 <code>NoExpose</code> 이벤트가 생긴다.</li>
+<li>새 GC의 graphics-exposures 기본값은 <code>True</code>다.</li>
+</ul>
+<p>쓰는 GC 요소: function, plane-mask, subwindow-mode, graphics-exposures, clip-x-origin, clip-y-origin, clip-mask.</p>
+<p>오류: <code>BadDrawable</code>, <code>BadGC</code>, <code>BadMatch</code>.</p>
+<pre><code>/* 더블 버퍼링: 픽스맵에 그리고 창으로 한 번에 복사 */
+Pixmap back = XCreatePixmap(dpy, win, W, H, DefaultDepth(dpy, scr));
+XSetForeground(dpy, gc, WhitePixel(dpy, scr));
+XFillRectangle(dpy, back, gc, 0, 0, W, H);       /* 픽스맵 지우기 */
+XSetForeground(dpy, gc, BlackPixel(dpy, scr));
+XDrawLine(dpy, back, gc, 0, 0, W, H);
+XCopyArea(dpy, back, win, gc, 0, 0, W, H, 0, 0);</code></pre>
+<div class="tip">픽스맵을 창으로 복사하는 일에는 <code>GraphicsExpose</code>/<code>NoExpose</code>가 필요 없는 경우가 많다. 이벤트 마스크와 상관없이 오는 이벤트라, 처리하지 않으면 이벤트 큐에 쌓인다. 필요 없으면 <code>XSetGraphicsExposures(dpy, gc, False)</code>로 끈다. 반대로 창 안에서 스크롤할 때(창→같은 창 복사)는 가려졌던 부분을 다시 그리기 위해 <code>GraphicsExpose</code>를 처리해야 한다.</div>
+
+<h4>XCopyPlane</h4>
+<pre><code>XCopyPlane(Display *display, Drawable src, Drawable dest, GC gc,
+           int src_x, int src_y, unsigned int width, unsigned int height,
+           int dest_x, int dest_y, unsigned long plane);</code></pre>
+<p>원본의 <b>비트 플레인 하나</b>를 골라 GC의 foreground/background 색으로 대상에 칠한다. 흔한 용도는 깊이 1의 비트맵(아이콘 등)을 컬러 창에 그리는 것이다(이때 <code>plane</code>은 1).</p>
+<ul>
+<li>루트는 같아야 하지만 <b>깊이는 달라도 된다</b>(<code>XCopyArea</code>와의 차이). 루트가 다르면 <code>BadMatch</code>.</li>
+<li><code>plane</code>은 비트가 정확히 하나만 켜져 있어야 하고 2<sup>n</sup>(n은 src의 깊이)보다 작아야 한다. 아니면 <code>BadValue</code>.</li>
+<li>동작: 대상과 같은 깊이, 원본 영역 크기의 픽스맵을 만든다고 생각하면 된다. 원본 플레인 비트가 1인 곳은 foreground, 0인 곳은 background이고, 그것을 <code>CopyArea</code> 요청처럼 복사한다(노출 규칙도 같다). 원본 플레인을 fill-style <code>FillOpaqueStippled</code>의 스티플로 써서 사각형을 채우는 것과 같다고 볼 수도 있다.</li>
+</ul>
+<p>쓰는 GC 요소: function, plane-mask, foreground, background, subwindow-mode, graphics-exposures, clip-x-origin, clip-y-origin, clip-mask.</p>
+<p>오류: <code>BadDrawable</code>, <code>BadGC</code>, <code>BadMatch</code>, <code>BadValue</code>.</p>
+<pre><code>/* 1비트 비트맵을 컬러 창에 빨강/흰색으로 그리기 */
+XSetForeground(dpy, gc, red_pixel);
+XSetBackground(dpy, gc, WhitePixel(dpy, scr));
+XCopyPlane(dpy, bitmap, win, gc, 0, 0, bw, bh, 10, 10, 1);</code></pre>
+
+<h3>8.3 점·선·사각형·호 그리기 <small>(Drawing Points, Lines, Rectangles, and Arcs)</small></h3>
+<p>여러 개를 한 번에 그리는 함수들이 쓰는 구조체는 다음과 같다.</p>
+<pre><code>typedef struct { short x1, y1, x2, y2; } XSegment;
+typedef struct { short x, y; } XPoint;
+typedef struct { short x, y; unsigned short width, height; } XRectangle;
+typedef struct {
+    short x, y;
+    unsigned short width, height;
+    short angle1, angle2;          /* 도 * 64 */
+} XArc;</code></pre>
+<p>x, y는 부호 있는 정수, width, height는 16비트 부호 없는 정수다. 프로토콜의 필드가 16비트이므로 이 범위를 넘는 좌표·크기를 만들지 않도록 조심해야 한다(int 인자로 넘겨도 결국 16비트로 잘린다).</p>
+
+<h4>XDrawPoint, XDrawPoints</h4>
+<pre><code>XDrawPoint(Display *display, Drawable d, GC gc, int x, int y);
+XDrawPoints(Display *display, Drawable d, GC gc, XPoint *points, int npoints, int mode);</code></pre>
+<p>GC의 foreground와 function으로 점을 찍는다. <code>XDrawPoints</code>는 배열 순서대로 찍는다.</p>
+<ul>
+<li><code>mode</code>: <code>CoordModeOrigin</code>이면 모든 좌표가 원점 기준, <code>CoordModePrevious</code>면 첫 점 이후의 좌표는 <b>바로 앞 점 기준 상대값</b>이다.</li>
+</ul>
+<p>쓰는 GC 요소: function, plane-mask, foreground, subwindow-mode, clip-x-origin, clip-y-origin, clip-mask.</p>
+<p>오류: <code>XDrawPoint</code>는 <code>BadDrawable</code>, <code>BadGC</code>, <code>BadMatch</code>. <code>XDrawPoints</code>는 여기에 <code>BadValue</code>.</p>
+<div class="tip">점을 하나씩 수만 개 찍으면 느리다. 모아서 <code>XDrawPoints</code>로 보내거나, 픽셀 단위 작업이면 클라이언트 쪽 <code>XImage</code>에 그린 뒤 <code>XPutImage</code>로 한 번에 보내는 편이 훨씬 빠르다(8.6절).</div>
+
+<h4>XDrawLine, XDrawLines, XDrawSegments</h4>
+<pre><code>XDrawLine(Display *display, Drawable d, GC gc, int x1, int y1, int x2, int y2);
+XDrawLines(Display *display, Drawable d, GC gc, XPoint *points, int npoints, int mode);
+XDrawSegments(Display *display, Drawable d, GC gc, XSegment *segments, int nsegments);</code></pre>
+<ul>
+<li><code>XDrawLine</code>: (x1, y1)과 (x2, y2)를 잇는 선 하나. 끝점이 겹쳐도 이음(join) 처리를 하지 않는다.</li>
+<li><code>XDrawLines</code>: 점 배열을 차례로 이어 <code>npoints-1</code>개의 선(꺾은선)을 그린다. 중간 점에서 선이 제대로 이어지고(join-style 적용), 첫 점과 끝 점이 같으면 처음과 마지막 선도 제대로 이어진다(닫힌 도형). <code>mode</code>는 점 그리기와 같다.</li>
+<li><code>XDrawSegments</code>: 서로 떨어진 선분 여러 개. 배열 순서대로 그리고, 끝점이 겹쳐도 이음 처리를 하지 않는다.</li>
+</ul>
+<p>한 선 안에서는 같은 픽셀을 두 번 그리지 않는다. 선끼리 교차하면 교차 픽셀은 여러 번 그려진다. 단, <code>XDrawLines</code>에서 <b>굵은 선</b>(line-width가 0이 아님)끼리 교차하면 요청 전체가 하나의 채워진 도형인 것처럼 한 번만 그려진다. 이 차이는 function이 <code>GXxor</code>일 때 눈에 띈다(두 번 그리면 원래대로 돌아오기 때문).</p>
+<p>쓰는 GC 요소: function, plane-mask, line-width, line-style, cap-style, fill-style, subwindow-mode, clip-x-origin, clip-y-origin, clip-mask(<code>XDrawLines</code>는 join-style도). 모드에 따라 foreground, background, tile, stipple, tile-stipple-x-origin, tile-stipple-y-origin, dash-offset, dash-list.</p>
+<p>오류: <code>BadDrawable</code>, <code>BadGC</code>, <code>BadMatch</code>. <code>XDrawLines</code>는 <code>BadValue</code>도.</p>
+<pre><code>/* 닫힌 삼각형: 첫 점을 마지막에 반복하면 모서리가 제대로 이어진다 */
+XPoint tri[4] = { {50, 10}, {90, 80}, {10, 80}, {50, 10} };
+XSetLineAttributes(dpy, gc, 4, LineSolid, CapButt, JoinRound);
+XDrawLines(dpy, win, gc, tri, 4, CoordModeOrigin);</code></pre>
+
+<h4>XDrawRectangle, XDrawRectangles</h4>
+<pre><code>XDrawRectangle(Display *display, Drawable d, GC gc, int x, int y,
+               unsigned int width, unsigned int height);
+XDrawRectangles(Display *display, Drawable d, GC gc, XRectangle rectangles[], int nrectangles);</code></pre>
+<p>사각형의 <b>테두리</b>를 그린다. 각 사각형마다 다음 다섯 점의 <code>PolyLine</code>을 그린 것과 같다.</p>
+<pre><code>[x,y] [x+width,y] [x+width,y+height] [x,y+height] [x,y]</code></pre>
+<p>한 사각형 안에서는 픽셀을 두 번 그리지 않고, 사각형끼리 겹치면 겹친 픽셀은 여러 번 그려진다. 배열 순서대로 그린다.</p>
+<div class="tip">함정: 테두리는 x부터 <b>x+width까지</b> 그려지므로, 굵기 0~1의 선이면 실제로 차지하는 크기가 <code>(width+1) × (height+1)</code> 픽셀이다. 반면 <code>XFillRectangle</code>은 정확히 <code>width × height</code>를 채운다. 100×50 창의 가장자리에 테두리를 그리려면 <code>XDrawRectangle(dpy, win, gc, 0, 0, 99, 49)</code>로 해야 한다.</div>
+<p>쓰는 GC 요소: function, plane-mask, line-width, line-style, cap-style, join-style, fill-style, subwindow-mode, clip-x-origin, clip-y-origin, clip-mask. 모드에 따라 foreground, background, tile, stipple, tile-stipple-x-origin, tile-stipple-y-origin, dash-offset, dash-list.</p>
+<p>오류: <code>BadDrawable</code>, <code>BadGC</code>, <code>BadMatch</code>.</p>
+
+<h4>XDrawArc, XDrawArcs</h4>
+<pre><code>XDrawArc(Display *display, Drawable d, GC gc, int x, int y,
+         unsigned int width, unsigned int height, int angle1, int angle2);
+XDrawArcs(Display *display, Drawable d, GC gc, XArc *arcs, int narcs);</code></pre>
+<p>원이나 타원의 호를 그린다. 호는 <b>사각형 하나와 각도 두 개</b>로 정한다.</p>
+<ul>
+<li><code>x</code>, <code>y</code>, <code>width</code>, <code>height</code>: 원/타원을 감싸는 사각형. 중심은 사각형 중심, 장축과 단축은 width와 height.</li>
+<li><code>angle1</code>: 시작 각도. 중심에서 <b>3시 방향</b>을 0으로 하며, 단위는 <b>도 × 64</b>.</li>
+<li><code>angle2</code>: 시작점에서부터의 <b>범위(길이)</b>. 끝 각도가 아니다. 단위는 도 × 64.</li>
+<li>양수는 반시계 방향, 음수는 시계 방향. <code>angle2</code>의 크기가 360도를 넘으면 360도로 자른다.</li>
+</ul>
+<p>정확한 기하: 호 [x, y, width, height, angle1, angle2]의 축 원점은 [x + width/2, y + height/2]이고, 두께 없는 이상적 경로는 수평축과 [x, y + height/2], [x + width, y + height/2]에서, 수직축과 [x + width/2, y], [x + width/2, y + height]에서 만난다. 이 좌표는 소수일 수 있고 잘리지 않는다. 굵기 lw인 선은 경로에서 수직 거리 lw/2인 두 경로 사이를 채운다. 끝점의 cap-style과 join-style은 그 점의 접선 방향 선처럼 적용된다.</p>
+<p>타원에서 각도는 타원에 맞게 찌그러진 좌표계에서 잰다(원이면 보통 각도와 같다). 화면에서 각도기로 잰 각도(normal-angle)와의 관계는 다음과 같다(라디안, 0~2π).</p>
+<pre><code>skewed-angle = atan( tan(normal-angle) * width / height ) + adjust
+adjust = 0   (normal-angle이 [0, π/2])
+       = π   (normal-angle이 [π/2, 3π/2])
+       = 2π  (normal-angle이 [3π/2, 2π])</code></pre>
+<p>한 호 안에서는 픽셀을 두 번 그리지 않는다. 두 호가 제대로 이어지고 선 굵기가 0보다 크면 교차해도 두 번 그리지 않고, 그 밖에는 교차 픽셀이 여러 번 그려진다. 한 끝점에서 시계 방향으로 지정한 호와 다른 끝점에서 반시계 방향으로 지정한 같은 호는 이음 처리를 빼면 같은 픽셀을 그린다. 앞 호의 끝점이 다음 호의 시작점과 같으면 제대로 이어지고, 첫 호의 시작점이 마지막 호의 끝점과 같아도 이어진다. 축 하나를 0으로 하면 수평선이나 수직선이 된다. 각도는 좌표계만으로 계산하고 화면의 종횡비는 무시한다.</p>
+<p>쓰는 GC 요소: 사각형 그리기와 같다(function, plane-mask, line-width, line-style, cap-style, join-style, fill-style, subwindow-mode, clip 관련, 모드 의존 요소들).</p>
+<p>오류: <code>BadDrawable</code>, <code>BadGC</code>, <code>BadMatch</code>.</p>
+<pre><code>/* 중심 (100,100), 반지름 50인 원 전체 */
+XDrawArc(dpy, win, gc, 100 - 50, 100 - 50, 100, 100, 0, 360 * 64);
+
+/* 12시에서 시작해 시계 방향으로 90도(3시까지) */
+XDrawArc(dpy, win, gc, 50, 50, 100, 100, 90 * 64, -90 * 64);</code></pre>
+<div class="tip">가장 흔한 실수 두 가지: (1) 각도에 64를 곱하지 않는 것. <code>360</code>을 넘기면 5.6도짜리 호가 된다. (2) <code>angle2</code>를 끝 각도로 생각하는 것. 범위다. 또 y축이 아래로 자라는 화면 좌표지만 각도는 수학처럼 반시계 방향이 양수다(90*64는 12시 방향).</div>
+
+<h3>8.4 영역 채우기 <small>(Filling Areas)</small></h3>
+<h4>XFillRectangle, XFillRectangles</h4>
+<pre><code>XFillRectangle(Display *display, Drawable d, GC gc, int x, int y,
+               unsigned int width, unsigned int height);
+XFillRectangles(Display *display, Drawable d, GC gc, XRectangle *rectangles, int nrectangles);</code></pre>
+<p>사각형 안을 채운다. 각 사각형마다 네 점 <code>[x,y] [x+width,y] [x+width,y+height] [x,y+height]</code>의 <code>FillPolygon</code>을 한 것과 같다. 채우기 규칙상 경로 안쪽 픽셀만 칠해지므로 결과는 정확히 width × height다. 한 사각형 안에서는 픽셀을 두 번 칠하지 않고, 겹치면 여러 번 칠한다. 배열 순서대로 칠한다.</p>
+<p>쓰는 GC 요소: function, plane-mask, fill-style, subwindow-mode, clip-x-origin, clip-y-origin, clip-mask. 모드에 따라 foreground, background, tile, stipple, tile-stipple-x-origin, tile-stipple-y-origin.</p>
+<p>오류: <code>BadDrawable</code>, <code>BadGC</code>, <code>BadMatch</code>.</p>
+
+<h4>XFillPolygon</h4>
+<pre><code>XFillPolygon(Display *display, Drawable d, GC gc, XPoint *points, int npoints,
+             int shape, int mode);</code></pre>
+<p>점들로 둘러싼 다각형을 채운다. 마지막 점이 첫 점과 다르면 자동으로 닫는다. 한 픽셀을 두 번 칠하지 않는다. <code>mode</code>는 <code>CoordModeOrigin</code>/<code>CoordModePrevious</code>.</p>
+<p><code>shape</code>는 서버가 빠른 알고리즘을 고를 수 있게 주는 힌트다.</p>
+<table>
+<tr><th>값</th><th>뜻</th><th>주의</th></tr>
+<tr><td><code>Complex</code></td><td>경로가 스스로 교차해도 된다(연속으로 같은 점이 반복되는 것은 교차로 보지 않음).</td><td>가장 안전하지만 가장 느릴 수 있다.</td></tr>
+<tr><td><code>Nonconvex</code></td><td>스스로 교차하지 않지만 볼록하지는 않다.</td><td>자기 교차 경로에 쓰면 결과 정의 안 됨.</td></tr>
+<tr><td><code>Convex</code></td><td>안의 어느 두 점을 이어도 경로와 교차하지 않는다(볼록).</td><td>가장 빠를 수 있음. 볼록이 아닌데 쓰면 결과 정의 안 됨.</td></tr>
+</table>
+<p>스스로 교차하는 다각형을 어떻게 채울지는 GC의 fill-rule(<code>EvenOddRule</code>/<code>WindingRule</code>)이 정한다.</p>
+<p>쓰는 GC 요소: function, plane-mask, fill-style, fill-rule, subwindow-mode, clip-x-origin, clip-y-origin, clip-mask. 모드에 따라 foreground, background, tile, stipple, tile-stipple-x-origin, tile-stipple-y-origin.</p>
+<p>오류: <code>BadDrawable</code>, <code>BadGC</code>, <code>BadMatch</code>, <code>BadValue</code>.</p>
+<pre><code>/* 별 모양(자기 교차) - Complex로 지정해야 한다 */
+XPoint star[5] = { {50,0}, {79,90}, {2,35}, {98,35}, {21,90} };
+XSetFillRule(dpy, gc, WindingRule);   /* 가운데까지 채움. EvenOddRule이면 가운데가 빈다 */
+XFillPolygon(dpy, win, gc, star, 5, Complex, CoordModeOrigin);</code></pre>
+
+<h4>XFillArc, XFillArcs</h4>
+<pre><code>XFillArc(Display *display, Drawable d, GC gc, int x, int y,
+         unsigned int width, unsigned int height, int angle1, int angle2);
+XFillArcs(Display *display, Drawable d, GC gc, XArc *arcs, int narcs);</code></pre>
+<p>호의 두께 없는 경로와, GC의 arc-mode에 따라 선분 한두 개로 닫은 영역을 채운다. 인자의 뜻은 <code>XDrawArc</code>와 같다.</p>
+<ul>
+<li><code>ArcChord</code>: 호의 두 끝점을 잇는 선분 하나로 닫는다(활꼴).</li>
+<li><code>ArcPieSlice</code>: 두 끝점을 중심과 잇는 선분 두 개로 닫는다(부채꼴, 기본값). 원그래프에 쓴다.</li>
+</ul>
+<p>한 호 안에서는 두 번 칠하지 않고, 영역끼리 겹치면 여러 번 칠한다. 배열 순서대로 칠한다.</p>
+<p>쓰는 GC 요소: function, plane-mask, fill-style, arc-mode, subwindow-mode, clip-x-origin, clip-y-origin, clip-mask. 모드에 따라 foreground, background, tile, stipple, tile-stipple-x-origin, tile-stipple-y-origin.</p>
+<p>오류: <code>BadDrawable</code>, <code>BadGC</code>, <code>BadMatch</code>.</p>
+<pre><code>/* 꽉 찬 원 */
+XFillArc(dpy, win, gc, cx - r, cy - r, 2 * r, 2 * r, 0, 360 * 64);</code></pre>
+
+<h3>8.5 폰트 정보 <small>(Font Metrics)</small></h3>
+<p>폰트는 비슷한 크기의 작은 무늬(글자)를 반복해서 효율적으로 쓰기 위한 글자 모양 모음이다. 서버는 프로그램이 요청할 때 폰트를 읽어 들이고 캐시할 수 있다. 폰트는 서버의 <b>모든 화면에서 공통</b>이다. 대부분의 앱은 <code>XLoadQueryFont</code> 하나로 폰트를 불러오고 크기 정보도 얻는다.</p>
+<p>글자는 <b>마스크</b>로 취급된다. 이미지 텍스트(<code>XDrawImageString</code>)를 빼면, 글자에서 비트가 1인 픽셀만 바뀐다. 그래서 스티플이나 타일로 글자를 그리는 것이 의미가 있다(메뉴에서 못 쓰는 항목을 회색 점무늬로 그리는 식).</p>
+<div class="tip">이 장의 폰트는 X 서버 쪽 "코어 폰트"다. 요즘 데스크톱 앱은 Xft/fontconfig로 클라이언트가 직접 글꼴을 그리는 경우가 많고, 코어 폰트는 서버에 설치된 비트맵 폰트(예: <code>fixed</code>) 위주다. 한글 같은 다국어 텍스트는 13장의 폰트 세트(<code>XCreateFontSet</code>, <code>XmbDrawString</code>)를 쓰는 것이 맞다.</div>
+
+<h4>구조체</h4>
+<pre><code>typedef struct {
+    short lbearing;            /* 원점에서 글자 왼쪽 끝까지 */
+    short rbearing;            /* 원점에서 글자 오른쪽 끝까지 */
+    short width;               /* 다음 글자 원점까지의 전진 거리 */
+    short ascent;              /* 기준선에서 위쪽 끝까지 */
+    short descent;             /* 기준선에서 아래쪽 끝까지 */
+    unsigned short attributes; /* 글자별 플래그 (정의 안 됨) */
+} XCharStruct;
+
+typedef struct { Atom name; unsigned long card32; } XFontProp;
+
+typedef struct { unsigned char byte1; unsigned char byte2; } XChar2b;
+
+typedef struct {
+    XExtData *ext_data;
+    Font fid;                  /* 폰트 ID */
+    unsigned direction;        /* 그리는 방향 힌트 */
+    unsigned min_char_or_byte2;/* 첫 글자 */
+    unsigned max_char_or_byte2;/* 마지막 글자 */
+    unsigned min_byte1;        /* 존재하는 첫 행 */
+    unsigned max_byte1;        /* 존재하는 마지막 행 */
+    Bool all_chars_exist;      /* 모든 글자가 0이 아닌 크기인가 */
+    unsigned default_char;     /* 없는 글자 대신 찍을 글자 */
+    int n_properties;
+    XFontProp *properties;
+    XCharStruct min_bounds;    /* 모든 글자에 대한 최소값 */
+    XCharStruct max_bounds;    /* 모든 글자에 대한 최대값 */
+    XCharStruct *per_char;     /* 글자별 정보 */
+    int ascent;                /* 줄 간격용 논리적 위 높이 */
+    int descent;               /* 줄 간격용 논리적 아래 깊이 */
+} XFontStruct;</code></pre>
+<p>X는 1바이트 글자, 2바이트 행렬 글자, 16비트 글자 텍스트를 지원한다. 어떤 형식이든 어떤 폰트에 쓸 수 있지만, 1바이트 요청은 2바이트 폰트의 첫 행만 가리킬 수 있다. 2바이트 폰트는 2차원 표로 생각하면 된다: byte1이 행 범위, byte2가 열 범위다. 1바이트 폰트는 행이 하나이고 byte2 범위가 글자 범위다.</p>
+
+<h4>멤버의 뜻</h4>
+<ul>
+<li><code>direction</code>: <code>FontLeftToRight</code> 또는 <code>FontRightToLeft</code>. 대부분의 글자 width가 양수인지 음수인지에 대한 힌트일 뿐이다. 코어 프로토콜은 세로쓰기를 지원하지 않는다.</li>
+<li><code>min_byte1</code>, <code>max_byte1</code>이 둘 다 0이면 <code>min_char_or_byte2</code>가 <code>per_char[0]</code>의 글자 번호, <code>max_char_or_byte2</code>가 마지막 원소의 글자 번호다(선형 인덱스).</li>
+<li>둘 중 하나라도 0이 아니면 <code>min_char_or_byte2</code>, <code>max_char_or_byte2</code>는 256 미만이고, <code>per_char[N]</code>에 해당하는 글자는 <code>D = max_char_or_byte2 - min_char_or_byte2 + 1</code>로 놓고 <code>byte1 = N / D + min_byte1</code>, <code>byte2 = N % D + min_char_or_byte2</code>(정수 나눗셈·나머지)다.</li>
+<li><code>per_char</code>가 NULL이면 첫 글자부터 마지막 글자까지 모두 같은 정보이고, <code>min_bounds</code>와 <code>max_bounds</code>에 있다(고정폭 폰트에서 흔하다). 모든 글자 크기가 같은 폰트면 min/max bounds만 쓰인다.</li>
+<li><code>all_chars_exist</code>가 <code>True</code>면 <code>per_char</code>의 모든 글자가 0이 아닌 크기의 상자를 가진다.</li>
+<li><code>default_char</code>: 없거나 정의되지 않은 글자를 찍을 때 대신 쓰는 글자. 2바이트 글자가 아니라 16비트 값이고, 2바이트 행렬 폰트면 byte1이 상위 바이트, byte2가 하위 바이트다. <code>default_char</code> 자체도 없는 글자면 아무것도 찍지 않는다.</li>
+<li><code>min_bounds</code>/<code>max_bounds</code>: 존재하는 모든 글자에 대해 각 <code>XCharStruct</code> 멤버의 가장 극단적인 값. 모든 글자를 같은 원점 [x,y]에 겹쳤을 때의 폰트 경계 상자는 왼쪽 위가 <code>[x + min_bounds.lbearing, y - max_bounds.ascent]</code>, 너비 <code>max_bounds.rbearing - min_bounds.lbearing</code>, 높이 <code>max_bounds.ascent + max_bounds.descent</code>다.</li>
+<li><code>ascent</code>/<code>descent</code>(XFontStruct): 줄 간격을 정할 때 쓰는 <b>논리적</b> 높이와 깊이. 특정 글자는 이 범위를 넘을 수 있다. 기준선이 y이면 폰트의 논리 범위는 y − ascent부터 y + descent − 1까지다. 보통 줄 간격은 <code>ascent + descent</code>다.</li>
+</ul>
+<p>글자 원점이 [x,y]일 때 글자 하나의 경계 상자는 왼쪽 위 <code>[x + lbearing, y - ascent]</code>, 너비 <code>rbearing - lbearing</code>, 높이 <code>ascent + descent</code>이고, 다음 글자 원점은 <code>[x + width, y]</code>다. lbearing/rbearing은 원점에서 잉크(실제 칠해지는 부분)의 왼쪽/오른쪽 끝까지, ascent/descent는 위/아래 끝까지, width는 논리적 너비다.</p>
+<p>기준선(원점의 y)은 아래로 내려가지 않는 글자 바로 아래의 주사선으로 본다. descent가 0이면 y보다 작은 좌표의 픽셀만 그려진다. lbearing이 0이면 x보다 작은 좌표의 픽셀은 그려지지 않는다. 어떤 멤버든 음수일 수 있고, width가 음수면 다음 글자는 왼쪽에 놓인다. <code>attributes</code>의 해석은 프로토콜이 정하지 않는다. 없는 글자는 모든 멤버가 0이다.</p>
+<p>폰트에 속성(property)이 있다는 보장은 없다. 속성 값을 long으로 볼지 unsigned long으로 볼지는 그 속성에 대한 사전 지식으로 정해야 한다. 기본 속성 집합은 X Logical Font Description Conventions(XLFD) 표준에 있다.</p>
+
+<h4>XLoadFont</h4>
+<pre><code>Font XLoadFont(Display *display, char *name);</code></pre>
+<p>폰트를 불러와 폰트 ID를 돌려준다. 이름은 대소문자 무관이고, <code>?</code>(아무 한 글자)와 <code>*</code>(아무 개수의 글자)로 패턴을 쓰면 일치하는 아무 폰트나 쓴다. 이름 형식은 XLFD 표준을 따른다. 실패하면 <code>BadName</code> 오류가 난다(NULL을 돌려주는 방식이 아니므로 실패를 함수 반환값으로 알 수 없다). 폰트는 특정 화면에 묶이지 않고 어느 GC에나 넣을 수 있다. 다 쓰면 <code>XUnloadFont</code>. 오류: <code>BadAlloc</code>, <code>BadName</code>.</p>
+
+<h4>XQueryFont</h4>
+<pre><code>XFontStruct *XQueryFont(Display *display, XID font_ID);</code></pre>
+<p>폰트 ID나 <code>GContext</code> ID로 폰트 정보를 얻는다. GC에 든 폰트를 물어볼 수도 있는데, 이때 구조체의 <code>fid</code>는 <code>GContext</code> ID이므로 다른 함수에 폰트 ID로 쓸 때 조심해야 한다(<code>XGContextFromGC</code> 참고). 폰트가 없으면 NULL. 해제는 <code>XFreeFontInfo</code>.</p>
+
+<h4>XLoadQueryFont</h4>
+<pre><code>XFontStruct *XLoadQueryFont(Display *display, char *name);</code></pre>
+<p><code>XLoadFont</code>와 <code>XQueryFont</code>를 한 번에 한다. 폰트를 쓰는 가장 흔한 방법이다. 폰트가 없으면 <b>NULL</b>을 돌려준다(<code>XLoadFont</code>와 달리 실패를 반환값으로 확인할 수 있다). 오류: <code>BadAlloc</code>.</p>
+<pre><code>XFontStruct *fs = XLoadQueryFont(dpy, "-*-helvetica-medium-r-*-*-14-*-*-*-*-*-*-*");
+if (!fs) fs = XLoadQueryFont(dpy, "fixed");      /* 거의 항상 있는 폰트로 대체 */
+if (!fs) { fprintf(stderr, "폰트 없음\n"); exit(1); }
+XSetFont(dpy, gc, fs-&gt;fid);</code></pre>
+
+<h4>XFreeFont</h4>
+<pre><code>XFreeFont(Display *display, XFontStruct *font_struct);</code></pre>
+<p>폰트 ID와 폰트의 연결을 끊고 <code>XFontStruct</code>를 해제한다. 폰트 자체는 다른 리소스가 참조하지 않을 때 해제된다. 이후 그 데이터와 폰트를 다시 쓰면 안 된다. 오류: <code>BadFont</code>.</p>
+
+<h4>XGetFontProperty</h4>
+<pre><code>Bool XGetFontProperty(XFontStruct *font_struct, Atom atom, unsigned long *value_return);</code></pre>
+<p>폰트 속성 값을 얻는다. 속성이 있으면 <code>True</code>, 없으면 <code>False</code>. 표준 속성용 미리 정의된 아톰이 <code>&lt;X11/Xatom.h&gt;</code>에 있다(예: <code>XA_FONT</code>, <code>XA_UNDERLINE_POSITION</code>). 보장은 없지만 대체로 있다.</p>
+
+<h4>XUnloadFont</h4>
+<pre><code>XUnloadFont(Display *display, Font font);</code></pre>
+<p><code>XLoadFont</code>로 불러온 폰트의 ID 연결을 끊는다. 폰트는 다른 리소스가 참조하지 않으면 해제된다. 오류: <code>BadFont</code>.</p>
+
+<h4>폰트 이름 목록 얻기</h4>
+<pre><code>char **XListFonts(Display *display, char *pattern, int maxnames, int *actual_count_return);
+XFreeFontNames(char *list[]);
+char **XListFontsWithInfo(Display *display, char *pattern, int maxnames,
+                          int *count_return, XFontStruct **info_return);
+XFreeFontInfo(char **names, XFontStruct *free_info, int actual_count);</code></pre>
+<ul>
+<li><code>XListFonts</code>: 폰트 검색 경로(<code>XSetFontPath</code>, 9장)에 있는 폰트 중 패턴에 맞는 이름을 최대 <code>maxnames</code>개 돌려준다. <code>*</code>, <code>?</code> 와일드카드, 대소문자 무관. 없으면 NULL. 다 쓰면 <code>XFreeFontNames</code>.</li>
+<li><code>XListFontsWithInfo</code>: 이름과 함께 폰트 정보도 준다. 정보는 <code>XLoadQueryFont</code>와 같지만 <b>글자별 정보(per_char)는 없다</b>. 이름 배열만 해제하려면 <code>XFreeFontNames</code>, 이름과 정보 둘 다 또는 정보만 해제하려면 <code>XFreeFontInfo</code>.</li>
+<li><code>XFreeFontInfo</code>: 폰트 구조체(배열)와, 선택적으로 이름 배열을 해제한다. <code>names</code>가 NULL이면 이름은 해제하지 않는다. <code>XLoadQueryFont</code>로 연 폰트의 구조체를 넘기면 구조체만 해제되고 폰트는 닫히지 않으므로 <code>XUnloadFont</code>로 닫아야 한다.</li>
+</ul>
+<pre><code>int n;
+char **names = XListFonts(dpy, "*-medium-r-*-14-*", 50, &amp;n);
+for (int i = 0; i &lt; n; i++) puts(names[i]);
+if (names) XFreeFontNames(names);</code></pre>
+
+<h4>문자열 크기 계산 (클라이언트 쪽)</h4>
+<pre><code>int XTextWidth(XFontStruct *font_struct, char *string, int count);
+int XTextWidth16(XFontStruct *font_struct, XChar2b *string, int count);</code></pre>
+<p>글자 width를 모두 더한 값(픽셀)을 돌려준다. 8비트·2바이트 폰트 상관없다. 가운데 정렬, 오른쪽 정렬에 쓴다.</p>
+<pre><code>XTextExtents(XFontStruct *font_struct, char *string, int nchars, int *direction_return,
+             int *font_ascent_return, int *font_descent_return, XCharStruct *overall_return);
+XTextExtents16(XFontStruct *font_struct, XChar2b *string, int nchars, int *direction_return,
+               int *font_ascent_return, int *font_descent_return, XCharStruct *overall_return);</code></pre>
+<p>문자열의 경계 상자를 <b>로컬에서</b> 계산한다(서버 왕복 없음). 방향 힌트, 폰트 ascent/descent, 전체 크기(<code>overall_return</code>)를 돌려준다. <code>overall_return</code>은 다음과 같이 채워진다.</p>
+<ul>
+<li><code>ascent</code>/<code>descent</code>: 문자열 안 글자들의 ascent/descent 중 최대값.</li>
+<li><code>width</code>: 모든 글자 width의 합.</li>
+<li>각 글자에 대해 W = 앞 글자들의 width 합, L = 그 글자의 lbearing + W, R = rbearing + W라 할 때, <code>lbearing</code>은 L의 최소값, <code>rbearing</code>은 R의 최대값.</li>
+</ul>
+<p>선형 인덱스 폰트에서는 <code>XChar2b</code>를 byte1이 상위 바이트인 16비트 수로 해석한다. 폰트에 default_char가 없으면 정의되지 않은 글자는 모든 값이 0으로 취급된다.</p>
+<div class="tip"><code>font_ascent_return</code>/<code>font_descent_return</code>은 <b>폰트 전체</b>의 논리 값(줄 높이용)이고, <code>overall_return.ascent</code>/<code>descent</code>는 <b>이 문자열의 실제 잉크</b> 기준이다. 줄 간격에는 앞의 것, 글자에 꼭 맞는 상자를 그릴 때는 뒤의 것을 쓴다.</div>
+
+<h4>문자열 크기 질의 (서버 쪽)</h4>
+<pre><code>XQueryTextExtents(Display *display, XID font_ID, char *string, int nchars,
+                  int *direction_return, int *font_ascent_return,
+                  int *font_descent_return, XCharStruct *overall_return);
+XQueryTextExtents16(Display *display, XID font_ID, XChar2b *string, int nchars,
+                    int *direction_return, int *font_ascent_return,
+                    int *font_descent_return, XCharStruct *overall_return);</code></pre>
+<p>같은 계산을 서버에 물어본다. 폰트 ID나 GC의 <code>GContext</code> ID를 받으므로 <code>XFontStruct</code>가 없어도 쓸 수 있지만, 서버 왕복 비용이 든다. 결과 값의 의미는 <code>XTextExtents</code>와 같다. 모든 값이 0인 글자는 무시되고, default_char가 없으면 정의되지 않은 글자도 무시된다. 오류: <code>BadFont</code>, <code>BadGC</code>.</p>
+
+<h3>8.6 글자 그리기 <small>(Drawing Text)</small></h3>
+<p>세 종류가 있다. 복합 텍스트(<code>XDrawText</code>, 폰트·간격을 바꿔 가며), 일반 텍스트(<code>XDrawString</code>), 이미지 텍스트(<code>XDrawImageString</code>, 배경까지 칠함).</p>
+<p>모든 텍스트 함수의 (x, y)는 <b>첫 글자의 기준선(baseline) 원점</b>이다. 글자 상자의 왼쪽 위가 아니다. <code>XDrawImageString</code>의 배경 사각형 왼쪽 위를 (x,y)에 두려면 (x, y + ascent)를, 왼쪽 아래를 (x,y)에 두려면 (x, y − descent + 1)을 원점으로 넘긴다(ascent, descent는 <code>XFontStruct</code>의 폰트 값).</p>
+<div class="tip">초보자가 가장 많이 겪는 문제: <code>XDrawString(dpy, win, gc, 10, 0, "Hi", 2)</code>처럼 y를 0으로 주면 글자가 기준선 위에 그려지므로 창 밖으로 나가 거의 보이지 않는다. 맨 위 줄은 <code>y = fs-&gt;ascent</code>부터 시작하고, 다음 줄은 <code>ascent + descent</code>씩 내려간다.</div>
+
+<h4>XDrawText, XDrawText16</h4>
+<pre><code>typedef struct {
+    char *chars;    /* 문자열 */
+    int nchars;     /* 글자 수 */
+    int delta;      /* 문자열 사이 간격 */
+    Font font;      /* 쓸 폰트, None이면 바꾸지 않음 */
+} XTextItem;
+
+typedef struct {
+    XChar2b *chars; int nchars; int delta; Font font;
+} XTextItem16;
+
+XDrawText(Display *display, Drawable d, GC gc, int x, int y, XTextItem *items, int nitems);
+XDrawText16(Display *display, Drawable d, GC gc, int x, int y, XTextItem16 *items, int nitems);</code></pre>
+<p>텍스트 항목 배열을 차례로 그린다. 항목마다 폰트를 바꾸고 간격을 띄울 수 있다.</p>
+<ul>
+<li><code>font</code>가 <code>None</code>이 아니면 그 폰트를 <b>GC에 저장</b>하고 이후 텍스트에 쓴다. 즉 호출이 끝난 뒤에도 GC의 폰트가 바뀌어 있다.</li>
+<li><code>delta</code>: 문자열을 그리기 전에 x축으로 추가로 움직이는 양. 항상 글자 원점에 더해지고 폰트와 무관하다.</li>
+<li>글자 모양은 채우기 연산의 마스크로 쓰여 비트가 1인 곳만 바뀐다.</li>
+<li>어떤 항목이 <code>BadFont</code>를 내면 앞 항목들은 이미 그려졌을 수 있다.</li>
+</ul>
+<p>쓰는 GC 요소: function, plane-mask, fill-style, font, subwindow-mode, clip-x-origin, clip-y-origin, clip-mask. 모드에 따라 foreground, background, tile, stipple, tile-stipple-x-origin, tile-stipple-y-origin.</p>
+<p>오류: <code>BadDrawable</code>, <code>BadFont</code>, <code>BadGC</code>, <code>BadMatch</code>.</p>
+<pre><code>XTextItem it[2] = {
+    { "Bold:", 5, 0,  bold_fs-&gt;fid },
+    { "normal text", 11, 8, normal_fs-&gt;fid }   /* 8픽셀 띄우고 다른 폰트 */
+};
+XDrawText(dpy, win, gc, 10, 30, it, 2);</code></pre>
+
+<h4>XDrawString, XDrawString16</h4>
+<pre><code>XDrawString(Display *display, Drawable d, GC gc, int x, int y, char *string, int length);
+XDrawString16(Display *display, Drawable d, GC gc, int x, int y, XChar2b *string, int length);</code></pre>
+<p>GC의 폰트로 문자열을 그린다. 글자 비트가 1인 곳만 바뀐다(배경은 그대로). <code>length</code>는 글자 수이며 <b>NUL 종료를 보지 않는다</b>. 보통 <code>strlen(s)</code>를 넘긴다. 원문에는 "2바이트 행렬 폰트를 <code>XDrawString16</code>과 쓰면 각 바이트를 byte1이 0인 byte2로 쓴다"고 적혀 있는데, 문맥상(그리고 이미지 텍스트 절의 같은 문장으로 보아) 1바이트 함수 <code>XDrawString</code>을 2바이트 행렬 폰트에 쓰면 첫 행(byte1 = 0)의 글자만 쓸 수 있다는 뜻으로 읽는 것이 맞다.</p>
+<p>쓰는 GC 요소: function, plane-mask, fill-style, font, subwindow-mode, clip-x-origin, clip-y-origin, clip-mask. 모드에 따라 foreground, background, tile, stipple, tile-stipple-x-origin, tile-stipple-y-origin.</p>
+<p>오류: <code>BadDrawable</code>, <code>BadGC</code>, <code>BadMatch</code>.</p>
+<pre><code>/* 창 가운데에 글자 쓰기 */
+const char *msg = "Hello, X";
+int len = strlen(msg);
+int tw = XTextWidth(fs, (char *)msg, len);
+int x = (win_w - tw) / 2;
+int y = (win_h + fs-&gt;ascent - fs-&gt;descent) / 2;   /* 세로 가운데 */
+XDrawString(dpy, win, gc, x, y, (char *)msg, len);</code></pre>
+
+<h4>XDrawImageString, XDrawImageString16</h4>
+<pre><code>XDrawImageString(Display *display, Drawable d, GC gc, int x, int y, char *string, int length);
+XDrawImageString16(Display *display, Drawable d, GC gc, int x, int y, XChar2b *string, int length);</code></pre>
+<p>글자의 배경까지 칠하는 "이미지 텍스트"다. 터미널 에뮬레이터처럼 같은 자리에 글자를 계속 덮어 쓰는 앱에서, 지우고 다시 그리는 깜빡임을 막아 준다.</p>
+<ul>
+<li>먼저 GC의 <b>background</b> 색으로 사각형을 채우고, 그 위에 <b>foreground</b> 색으로 글자를 칠한다.</li>
+<li>사각형은 왼쪽 위 <code>[x, y - font-ascent]</code>, 너비 overall-width, 높이 font-ascent + font-descent다(값은 이 GC와 문자열로 <code>XQueryTextExtents</code>를 했을 때와 같다). 즉 글자 잉크 기준이 아니라 폰트의 논리 줄 높이 전체를 칠한다.</li>
+<li>GC의 function과 fill-style은 <b>무시된다</b>. 실제 function은 항상 <code>GXcopy</code>, fill-style은 <code>FillSolid</code>다. 그래서 XOR 그리기나 스티플 텍스트에는 쓸 수 없다.</li>
+<li>2바이트 행렬 폰트에 <code>XDrawImageString</code>을 쓰면 각 바이트를 byte1이 0인 byte2로 쓴다.</li>
+</ul>
+<p>쓰는 GC 요소: plane-mask, foreground, background, font, subwindow-mode, clip-x-origin, clip-y-origin, clip-mask.</p>
+<p>오류: <code>BadDrawable</code>, <code>BadGC</code>, <code>BadMatch</code>.</p>
+<div class="tip">이전 문자열보다 짧은 문자열을 덮어 쓰면 뒷부분이 남는다. 배경 사각형은 새 문자열 너비만큼만 칠해지기 때문이다. 고정폭 필드라면 공백으로 채워 길이를 맞추거나, 남는 부분을 <code>XFillRectangle</code>로 지운다.</div>
+
+<h3>8.7 클라이언트와 서버 사이 이미지 전송 <small>(Transferring Images between Client and Server)</small></h3>
+<p>서버마다 원하는 이미지 데이터 형식(바이트 순서, 비트 순서, 한 줄을 몇 바이트 단위로 맞추는지, 픽셀당 비트 수 등)이 다를 수 있다. 그래서 Xlib는 메모리 속 데이터를 <b>완전히 설명하는</b> 이미지 객체 <code>XImage</code>를 제공하고, 데이터를 직접 만지기보다 이 객체를 통해 다루라고 권한다. Xlib 구현에 따라서는 자주 쓰는 형식에 대해 객체의 함수 포인터를 빠른 전용 함수로 바꿔 넣기도 한다. 지원되는 연산은 이미지 파괴, 픽셀 읽기, 픽셀 쓰기, 부분 이미지 떼어 내기, 이미지에 상수 더하기이며 16.8절에 나온다(<code>XCreateImage</code>, <code>XGetPixel</code>, <code>XPutPixel</code>, <code>XSubImage</code>, <code>XAddPixel</code>, <code>XDestroyImage</code>).</p>
+
+<h4>XImage 구조체</h4>
+<pre><code>typedef struct _XImage {
+    int width, height;          /* 이미지 크기 */
+    int xoffset;                /* x 방향 픽셀 오프셋 */
+    int format;                 /* XYBitmap, XYPixmap, ZPixmap */
+    char *data;                 /* 이미지 데이터 포인터 */
+    int byte_order;             /* 데이터 바이트 순서: LSBFirst, MSBFirst */
+    int bitmap_unit;            /* 주사선 단위: 8, 16, 32 */
+    int bitmap_bit_order;       /* LSBFirst, MSBFirst */
+    int bitmap_pad;             /* 8, 16, 32 (XY 또는 ZPixmap) */
+    int depth;                  /* 이미지 깊이 */
+    int bytes_per_line;         /* 다음 주사선까지의 바이트 수 */
+    int bits_per_pixel;         /* 픽셀당 비트 (ZPixmap) */
+    unsigned long red_mask;     /* z 배치의 비트 */
+    unsigned long green_mask;
+    unsigned long blue_mask;
+    XPointer obdata;            /* 객체 루틴용 확장 포인터 */
+    struct funcs {              /* 이미지 조작 루틴 */
+        struct _XImage *(*create_image)();
+        int             (*destroy_image)();
+        unsigned long   (*get_pixel)();
+        int             (*put_pixel)();
+        struct _XImage *(*sub_image)();
+        int             (*add_pixel)();
+    } f;
+} XImage;</code></pre>
+<p>형식 세 가지의 차이를 알아 두면 좋다.</p>
+<table>
+<tr><th>format</th><th>데이터 배치</th><th>용도</th></tr>
+<tr><td><code>XYBitmap</code></td><td>깊이 1인 비트 평면 하나. 1은 GC foreground, 0은 background로 그려진다.</td><td>흑백 비트맵을 컬러 창에 그리기(<code>XPutImage</code> 전용)</td></tr>
+<tr><td><code>XYPixmap</code></td><td>비트 평면(plane)들을 차례로 이어 붙인 형태</td><td>특정 플레인만 읽고 쓸 때</td></tr>
+<tr><td><code>ZPixmap</code></td><td>픽셀마다 모든 비트가 붙어 있는 형태(픽셀 = <code>bits_per_pixel</code> 비트)</td><td>일반적인 이미지 처리. 24비트 화면에서는 보통 픽셀당 32비트</td></tr>
+</table>
+<div class="tip"><code>bytes_per_line</code>은 <code>width × 픽셀 바이트</code>와 같지 않을 수 있다. 각 줄 끝이 <code>bitmap_pad</code> 단위로 채워지기 때문이다. 데이터를 직접 다룰 때는 항상 <code>data + y * bytes_per_line</code>으로 줄을 찾는다. 가장 안전한 방법은 <code>XGetPixel</code>/<code>XPutPixel</code>을 쓰는 것이다.</div>
+
+<h4>XInitImage</h4>
+<pre><code>Status XInitImage(XImage *image);</code></pre>
+<p>이미지 구조체의 조작 루틴(<code>f</code>)을 다른 멤버 값에 맞게 초기화한다.</p>
+<ul>
+<li>함수 포인터를 뺀 <b>모든 멤버가 이미 채워져 있어야</b> 한다.</li>
+<li><code>bytes_per_line</code>이 0이면 데이터가 메모리에 빈틈없이 이어져 있다고 보고 알맞은 값을 계산해 넣는다. 0이 아니면 그대로 둔다.</li>
+<li>클라이언트가 직접 만든 <code>XImage</code>는 다른 Xlib 함수에 넘기기 전에 <b>반드시</b> 이 함수를 불러야 한다. Xlib가 만들거나 돌려준 이미지(<code>XCreateImage</code>, <code>XGetImage</code>)는 부를 필요가 없다.</li>
+<li>성공하면 0이 아닌 값. 구조체에서 오류나 모순을 찾으면 0을 돌려주고 이미지는 바꾸지 않는다.</li>
+</ul>
+
+<h4>XPutImage</h4>
+<pre><code>XPutImage(Display *display, Drawable d, GC gc, XImage *image,
+          int src_x, int src_y, int dest_x, int dest_y,
+          unsigned int width, unsigned int height);</code></pre>
+<p>클라이언트 메모리의 이미지를 Drawable의 사각형과 결합한다(보통은 그대로 써 넣는다). 클라이언트에서 픽셀을 계산한 결과(그림 파일 디코딩, 프레임 버퍼 에뮬레이션, 그래프 렌더링 등)를 화면에 보내는 기본 방법이다.</p>
+<ul>
+<li><code>src_x</code>, <code>src_y</code>: 이미지의 왼쪽/위 끝으로부터의 오프셋. 이미지의 일부만 보낼 수 있다.</li>
+<li><code>dest_x</code>, <code>dest_y</code>: Drawable 원점 기준으로 그 부분 이미지가 놓일 위치.</li>
+<li><code>width</code>, <code>height</code>: 보낼 부분 이미지 크기. 인자 순서에 주의: <code>XCopyArea</code>와 달리 크기가 <b>맨 뒤</b>에 온다.</li>
+<li><code>XYBitmap</code>이면 이미지 깊이가 1이어야 한다(아니면 <code>BadMatch</code>). GC의 foreground가 1비트, background가 0비트의 색이 된다.</li>
+<li><code>XYPixmap</code>, <code>ZPixmap</code>이면 이미지 깊이가 Drawable 깊이와 같아야 한다(아니면 <code>BadMatch</code>).</li>
+<li>이미지의 특성(<code>byte_order</code>, <code>bitmap_unit</code> 등)이 서버가 원하는 것과 다르면 <code>XPutImage</code>가 <b>자동으로 변환</b>한다. 그래서 <code>XImage</code>가 형식을 정확히 설명하고 있기만 하면 된다.</li>
+</ul>
+<p>쓰는 GC 요소: function, plane-mask, subwindow-mode, clip-x-origin, clip-y-origin, clip-mask. 모드에 따라 foreground, background.</p>
+<p>오류: <code>BadDrawable</code>, <code>BadGC</code>, <code>BadMatch</code>, <code>BadValue</code>.</p>
+<pre><code>/* 클라이언트에서 그라데이션을 계산해 창에 그리기 (cc grad.c -lX11) */
+#include &lt;stdlib.h&gt;
+#include &lt;X11/Xlib.h&gt;
+#include &lt;X11/Xutil.h&gt;
+
+int main(void)
+{
+    Display *dpy = XOpenDisplay(NULL);
+    if (!dpy) return 1;
+    int scr = DefaultScreen(dpy);
+    Visual *vis = DefaultVisual(dpy, scr);
+    int depth = DefaultDepth(dpy, scr);
+    int W = 256, H = 256;
+
+    Window win = XCreateSimpleWindow(dpy, RootWindow(dpy, scr), 0, 0, W, H, 0,
+                                     BlackPixel(dpy, scr), WhitePixel(dpy, scr));
+    XSelectInput(dpy, win, ExposureMask | KeyPressMask);
+    XMapWindow(dpy, win);
+    GC gc = XCreateGC(dpy, win, 0, NULL);
+
+    /* data는 Xlib가 XDestroyImage 때 free()하므로 malloc으로 잡는다.
+       bitmap_pad 32, bytes_per_line 0(자동 계산) */
+    char *data = malloc(W * H * 4);
+    XImage *img = XCreateImage(dpy, vis, depth, ZPixmap, 0, data, W, H, 32, 0);
+
+    for (int y = 0; y &lt; H; y++)
+        for (int x = 0; x &lt; W; x++) {
+            /* TrueColor 24비트 가정: 마스크로 위치를 맞추는 대신 간단히 */
+            unsigned long p = ((unsigned long)x &lt;&lt; 16) | (y &lt;&lt; 8) | 128;
+            XPutPixel(img, x, y, p);
+        }
+
+    for (;;) {
+        XEvent ev;
+        XNextEvent(dpy, &amp;ev);
+        if (ev.type == Expose &amp;&amp; ev.xexpose.count == 0)
+            XPutImage(dpy, win, gc, img, 0, 0, 0, 0, W, H);
+        else if (ev.type == KeyPress)
+            break;
+    }
+    XDestroyImage(img);           /* data도 함께 해제된다 */
+    XFreeGC(dpy, gc);
+    XCloseDisplay(dpy);
+    return 0;
+}</code></pre>
+<div class="tip">
+<ul>
+<li>픽셀 값은 RGB가 아니라 <b>픽셀 값</b>이다. 위 예처럼 <code>0xRRGGBB</code>를 바로 넣는 것은 흔한 24비트 <code>TrueColor</code>(red_mask 0xff0000 등)에서만 맞다. 이식성이 필요하면 <code>img-&gt;red_mask</code> 등으로 비트 위치를 계산하거나, 색마다 <code>XAllocColor</code>로 얻은 픽셀을 쓴다.</li>
+<li>이미지가 크면 요청 하나의 최대 크기를 넘을 수 있는데, Xlib가 알아서 여러 요청으로 나눠 보낸다. 그래도 매 프레임 큰 이미지를 보내면 느리므로, 원격 X가 아닌 경우 MIT-SHM 확장(<code>XShmPutImage</code>)을 쓰는 앱이 많다(이 매뉴얼 범위 밖).</li>
+</ul>
+</div>
+
+<h4>XGetImage</h4>
+<pre><code>XImage *XGetImage(Display *display, Drawable d, int x, int y,
+                  unsigned int width, unsigned int height,
+                  unsigned long plane_mask, int format);</code></pre>
+<p>Drawable의 사각형 내용을 읽어 새 <code>XImage</code>로 돌려준다. 원문은 이 함수가 "기초적인 화면 덤프(screen dump)"를 위한 것이라고 말한다. 스크린샷, 창 내용 저장, 픽셀 색 확인(스포이드) 등에 쓴다.</p>
+<ul>
+<li><code>x</code>, <code>y</code>, <code>width</code>, <code>height</code>: Drawable 원점 기준 사각형.</li>
+<li><code>plane_mask</code>: 읽을 플레인. 모든 플레인을 원하면 <code>AllPlanes</code>를 준다. 범위 검사를 하지 않고 남는 비트는 무시한다.</li>
+<li><code>format</code>: <code>XYPixmap</code> 또는 <code>ZPixmap</code>(<code>XYBitmap</code>은 안 된다).
+  <ul>
+  <li><code>XYPixmap</code>: <code>plane_mask</code>로 고른 플레인만 담긴다. 일부 플레인만 고르면 이미지 깊이는 고른 플레인 수(<code>plane_mask</code>의 1 비트 수)가 된다.</li>
+  <li><code>ZPixmap</code>: <code>plane_mask</code>에 없는 플레인의 비트는 0으로 채워 돌려준다. 깊이는 Drawable의 깊이.</li>
+  </ul></li>
+<li>돌려받은 이미지의 <code>depth</code> 멤버에 이미지 깊이가 들어 있다.</li>
+<li>실패하면 NULL.</li>
+</ul>
+<p>조건과 결과 내용:</p>
+<ul>
+<li>Drawable이 <b>픽스맵</b>이면 사각형이 픽스맵 안에 완전히 들어가야 한다. 아니면 <code>BadMatch</code>.</li>
+<li>Drawable이 <b>창</b>이면 창이 viewable(자신과 모든 조상이 맵된 상태)이어야 하고, 자식 창이나 겹친 창이 없다고 가정할 때 사각형이 화면 안에 완전히 보이며 창의 바깥 테두리 안에 완전히 들어가야 한다. 아니면 <code>BadMatch</code>. 즉 화면 밖으로 일부 나간 창을 통째로 읽으려 하면 실패한다.</li>
+<li>창의 <b>테두리(border)</b>도 포함해 읽을 수 있다.</li>
+<li>창에 backing store가 있으면, 자손이 아닌 다른 창에 가려진 부분은 backing store 내용을 돌려준다. 없으면 가려진 부분의 내용은 <b>정의되지 않는다</b>(보통 위에 덮은 창의 픽셀이 찍혀 나온다).</li>
+<li>깊이가 다른 자식 창의 보이는 부분의 내용도 정의되지 않는다.</li>
+<li>마우스 커서 모양은 포함되지 않는다.</li>
+</ul>
+<p>오류: <code>BadDrawable</code>, <code>BadMatch</code>, <code>BadValue</code>.</p>
+<pre><code>/* 루트 창(전체 화면)에서 한 픽셀의 색을 읽기 */
+Window root = RootWindow(dpy, scr);
+XImage *im = XGetImage(dpy, root, px, py, 1, 1, AllPlanes, ZPixmap);
+if (im) {
+    XColor c;
+    c.pixel = XGetPixel(im, 0, 0);
+    XQueryColor(dpy, DefaultColormap(dpy, scr), &amp;c);   /* 픽셀 값 → RGB */
+    printf("#%02x%02x%02x\n", c.red &gt;&gt; 8, c.green &gt;&gt; 8, c.blue &gt;&gt; 8);
+    XDestroyImage(im);
+}</code></pre>
+<div class="tip">
+<ul>
+<li>돌려받은 이미지는 <code>XDestroyImage</code>로 해제한다(<code>XFree</code>가 아니다. 데이터까지 해제해야 하므로).</li>
+<li><code>XGetImage</code>는 서버 왕복이 있는 동기 호출이고, 큰 영역이면 데이터 양도 크다. 매 프레임 부르지 않는다.</li>
+<li><code>BadMatch</code>가 나면 대부분 "창이 아직 맵되지 않았다(맵 직후 <code>Expose</code> 전)"거나 "사각형이 창이나 화면 밖으로 나갔다"는 뜻이다. 오류는 기본 오류 핸들러가 프로그램을 끝내 버리므로, 위험한 경우에는 <code>XGetWindowAttributes</code>로 크기와 <code>map_state</code>를 먼저 확인한다.</li>
+<li>얻은 픽셀 값은 그 창의 비주얼·컬러맵 기준이다. RGB로 바꾸려면 위처럼 <code>XQueryColor</code>를 쓰거나 TrueColor면 마스크로 분해한다.</li>
+</ul>
+</div>
+
+<h4>XGetSubImage</h4>
+<pre><code>XImage *XGetSubImage(Display *display, Drawable d, int x, int y,
+                     unsigned int width, unsigned int height,
+                     unsigned long plane_mask, int format,
+                     XImage *dest_image, int dest_x, int dest_y);</code></pre>
+<p><code>XGetImage</code>와 같은 방식으로 읽되, 새 이미지를 만들지 않고 <b>이미 있는 이미지</b>(<code>dest_image</code>)의 (<code>dest_x</code>, <code>dest_y</code>) 위치에 써 넣는다. 같은 크기의 영역을 반복해서 읽을 때 메모리 할당을 줄인다.</p>
+<ul>
+<li><code>format</code>, <code>plane_mask</code>의 동작은 <code>XGetImage</code>와 같다.</li>
+<li><code>dest_image</code>의 깊이는 Drawable의 깊이와 같아야 한다.</li>
+<li>부분 이미지가 대상 이미지의 그 위치에 다 들어가지 않으면 오른쪽과 아래쪽이 잘린다.</li>
+<li>픽스맵·창에 대한 조건(<code>BadMatch</code>), backing store, 정의되지 않는 내용에 대한 규칙은 <code>XGetImage</code>와 같다.</li>
+<li>편의상 <code>dest_image</code>와 같은 포인터를 돌려준다. 문제가 생기면 NULL.</li>
+</ul>
+<p>오류: <code>BadDrawable</code>, <code>BadGC</code>, <code>BadMatch</code>, <code>BadValue</code>.</p>
+<pre><code>/* 미리 만든 이미지 버퍼에 창의 왼쪽 위 100x100을 반복해서 읽기 */
+XImage *buf = XGetImage(dpy, win, 0, 0, 100, 100, AllPlanes, ZPixmap);
+/* ... 나중에 ... */
+XGetSubImage(dpy, win, 0, 0, 100, 100, AllPlanes, ZPixmap, buf, 0, 0);</code></pre>
+</section><div class="pager"><a href="ch7.html">← 7장. 그래픽 컨텍스트 함수 (Graphics Context Functions)</a><a href="./">차례</a><a href="ch9.html">9장. 윈도 매니저·세션 매니저 함수 (Window and Session Manager Functions) →</a></div>
+<a class="top" href="#">↑ 위로</a>
+</html>

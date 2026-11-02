@@ -1,0 +1,446 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>6장. 색 관리 함수 (Color Management Functions) — Xlib 한국어</title>
+<style>
+body{font:16px/1.75 system-ui,"Malgun Gothic",sans-serif;max-width:860px;margin:40px auto;padding:0 16px;background:#111;color:#e8e8e8}
+a{color:#7cf} h1{line-height:1.3} h2{margin-top:3em;border-bottom:1px solid #444;padding-bottom:.3em} h2 small{color:#999;font-weight:normal;font-size:.6em}
+h3{margin-top:2em;color:#fd8} h4{color:#9df}
+code{font-family:ui-monospace,Consolas,monospace;font-size:.92em;background:#222;padding:1px 4px;border-radius:3px}
+pre{background:#1b1d22;border:1px solid #333;padding:12px;overflow-x:auto;border-radius:6px;line-height:1.45} pre code{background:none;padding:0}
+.tip{background:#1d2a1d;border-left:4px solid #6c6;padding:8px 12px;margin:1em 0;border-radius:4px}
+table{border-collapse:collapse;margin:1em 0;font-size:.92em;display:block;overflow-x:auto} td,th{border:1px solid #444;padding:4px 8px;vertical-align:top} th{background:#222}
+nav ol{columns:2} .top{position:fixed;right:16px;bottom:16px;background:#333;padding:6px 10px;border-radius:6px;text-decoration:none}
+.pager{display:flex;justify-content:space-between;gap:12px;margin:2em 0;padding-top:1em;border-top:1px solid #444} .pager a{text-decoration:none}
+</style>
+<p><a href="../../">← 조이봉방</a> · <a href="./">Xlib 번역 차례</a></p><div class="pager"><a href="ch5.html">← 5장. 픽스맵과 커서 함수 (Pixmap and Cursor Functions)</a><a href="./">차례</a><a href="ch7.html">7장. 그래픽 컨텍스트 함수 (Graphics Context Functions) →</a></div><section id="ch6"><h2 style="margin-top:1em">6장. 색 관리 함수 <small>(Color Management Functions)</small></h2>
+
+<p>X에서 창에 보이는 색은 "픽셀 값 → 컬러맵 → 실제 RGB"라는 한 단계 간접 참조를 거친다. 창의 각 픽셀에는 색 자체가 아니라 <b>번호(pixel value)</b>가 들어 있고, 화면에 내보낼 때 그 번호로 <b>컬러맵(colormap)</b>을 찾아 RGB를 얻는다. 이 장은 그 컬러맵을 만들고, 색 이름이나 숫자로 색을 지정하고, 컬러맵 칸(color cell)을 할당·수정·해제하고, 칸의 값을 읽는 방법을 다룬다. 또 장비마다 다르게 보이는 RGB 대신 장비 독립 색 공간(CIE XYZ, xyY, L*u*v*, L*a*b*, TekHVC)으로 색을 지정하는 Xcms(X Color Management System)도 이 장에 들어 있다.</p>
+<p>접두어가 <code>Xcms</code>인 함수·타입·기호는 <code>&lt;X11/Xcms.h&gt;</code>에, 나머지는 <code>&lt;X11/Xlib.h&gt;</code>에 정의되어 있다.</p>
+<p>이 장의 Xcms 부분(색 변환 컨텍스트, 색 공간 변환, 콜백, 색역 질의, 색 공간 확장)은 실제로는 거의 쓰이지 않는다. 그래서 이 문서는 <b>색 구조체, 색 문자열, 컬러맵, <code>XAllocColor</code>/<code>XAllocNamedColor</code>/<code>XParseColor</code></b>를 자세히 풀고, Xcms 부분은 자주 쓰지 않아 요약만 한다.</p>
+
+<h3>들어가며: 컬러맵과 컬러 셀</h3>
+<p>창의 깊이(depth)가 4비트이면 픽셀 값은 0~15이고, 각 값마다 컬러맵에 칸이 하나씩 있다. 컬러맵은 이런 <b>컬러 셀</b>의 모음이고, 각 셀에는 빨강·초록·파랑(RGB) 세 값이 들어 있다. 화면 메모리에서 픽셀을 읽을 때마다 그 값으로 컬러맵을 찾아 셀의 RGB로 색을 낸다. 흑백 모니터의 회색조 화면이면 세 값을 합쳐 밝기를 정한다. 하드웨어가 RGB 값에서 실제로 쓰는 비트 수에는 한계가 있다.</p>
+<p>앱은 원하는 색을 얻으려고 셀을 <b>할당</b>한다. 할당에는 두 종류가 있다.</p>
+<table>
+<tr><th>종류</th><th>특징</th></tr>
+<tr><td>읽기 전용(read-only)</td><td>RGB 값을 서버가 정해 주고 바꿀 수 없다. 대신 같은 색을 원하는 여러 클라이언트가 <b>같은 셀을 공유</b>할 수 있다.</td></tr>
+<tr><td>읽기/쓰기(read/write)</td><td>할당한 클라이언트가 독점하고, 그 셀의 색을 언제든 바꿀 수 있다. 처음에는 색이 정해져 있지 않으므로 직접 값을 써 넣어야 한다.</td></tr>
+</table>
+<p>할당하지 않은 셀의 픽셀 값을 쓰면 색이 정의되지 않는다(아무 색이나 나올 수 있다).</p>
+<p>컬러맵은 창마다 붙어 있으므로 한 화면에 여러 컬러맵, 여러 종류의 컬러맵이 있을 수 있다. 하지만 하드웨어가 동시에 "설치(install)"할 수 있는 컬러맵 수는 한정되어 있고, 요즘(이 문서가 쓰인 당시) 많은 장비는 하나만 설치할 수 있다. 설치된 컬러맵을 쓰는 창은 제 색으로 보이고, 그렇지 않은 창은 엉뚱한 색으로 보인다. 어떤 컬러맵을 설치할지는 보통 윈도 매니저가 정한다(<code>XInstallColormap</code>, <code>XUninstallColormap</code>, 9장 참고).</p>
+<p>컬러맵은 화면(screen)마다 따로 있다. 화면에는 항상 <b>기본 컬러맵</b>이 있고(<code>DefaultColormap</code> 매크로), 대부분의 프로그램은 여기서 셀을 할당한다. 그래서 X의 함수들은 셀을 혼자 다 차지하지 말고 <b>나눠 쓰도록</b> 설계되어 있다. 기본 비주얼은 <code>DefaultVisual</code> 매크로로 얻고, 비주얼 종류는 <code>StaticGray</code>, <code>GrayScale</code>, <code>StaticColor</code>, <code>PseudoColor</code>, <code>TrueColor</code>, <code>DirectColor</code>가 있다(3.1절).</p>
+<div class="tip">왜 이렇게 복잡한가: X가 만들어질 때 흔했던 8비트 화면은 동시에 256색밖에 못 냈다. 그래서 "어떤 256색을 쓸지"를 컬러맵으로 정하고, 여러 앱이 그 256칸을 나눠 써야 했다. 요즘 흔한 24비트 <code>TrueColor</code> 화면에서는 컬러맵이 고정되어 있어서, 할당은 사실상 "이 RGB에 해당하는 픽셀 값을 계산해 달라"는 뜻이 된다. 그래도 이식성을 위해 <code>XAllocColor</code> 등을 거쳐 픽셀 값을 얻는 습관을 들이는 것이 좋다.</div>
+
+<h3>6.1 색 구조체 <small>(Color Structures)</small></h3>
+<h4>XColor</h4>
+<p>RGB 색만 다루는 함수들은 <code>XColor</code>를 쓴다.</p>
+<pre><code>typedef struct {
+    unsigned long pixel;              /* 픽셀 값 */
+    unsigned short red, green, blue;  /* RGB 값 */
+    char flags;                       /* DoRed, DoGreen, DoBlue */
+    char pad;
+} XColor;</code></pre>
+<ul>
+<li><code>red</code>, <code>green</code>, <code>blue</code>는 하드웨어가 실제로 몇 비트를 쓰든 <b>항상 0~65535</b> 범위다. 서버가 하드웨어 범위로 줄여서 쓴다. 검정은 (0,0,0), 흰색은 (65535,65535,65535).</li>
+<li><code>flags</code>는 일부 함수에서 세 성분 중 어느 것을 쓸지 정한다. <code>DoRed</code>, <code>DoGreen</code>, <code>DoBlue</code>를 0개 이상 OR 한다.</li>
+<li><code>pixel</code>은 컬러맵 안의 칸 번호다. 할당 함수가 채워 주거나, 저장·조회 함수에 넘길 때 내가 채운다.</li>
+</ul>
+<div class="tip">흔한 실수: 웹 색상처럼 0~255 값을 그대로 넣는 것. 8비트 값 <code>v</code>는 <code>v * 257</code>(또는 <code>(v &lt;&lt; 8) | v</code>)로 바꿔 넣어야 한다. 255를 그대로 넣으면 거의 검정(255/65535)이 된다.</div>
+
+<h4>XcmsColor (요약)</h4>
+<p>모든 색 공간을 다루는 Xcms 함수들은 <code>XcmsColor</code>를 쓴다. <code>XColor</code>처럼 <code>pixel</code>을 가지고, 색 값은 여러 색 공간용 구조체의 공용체(union)인 <code>spec</code>에 들어간다. 어떤 공간의 값인지는 <code>format</code>(타입 <code>XcmsColorFormat</code>, 즉 <code>unsigned long</code>)이 알려 준다.</p>
+<pre><code>typedef struct {
+    union {
+        XcmsRGB RGB;        XcmsRGBi RGBi;
+        XcmsCIEXYZ CIEXYZ;  XcmsCIEuvY CIEuvY;
+        XcmsCIExyY CIExyY;  XcmsCIELab CIELab;
+        XcmsCIELuv CIELuv;  XcmsTekHVC TekHVC;
+        XcmsPad Pad;
+    } spec;
+    unsigned long pixel;
+    XcmsColorFormat format;
+} XcmsColor;</code></pre>
+<p>표준 형식 값은 다음과 같다.</p>
+<table>
+<tr><th>매크로</th><th>값</th><th>공간</th></tr>
+<tr><td><code>XcmsUndefinedFormat</code></td><td>0x00000000</td><td>미정</td></tr>
+<tr><td><code>XcmsCIEXYZFormat</code></td><td>0x00000001</td><td>CIE XYZ</td></tr>
+<tr><td><code>XcmsCIEuvYFormat</code></td><td>0x00000002</td><td>CIE u'v'Y</td></tr>
+<tr><td><code>XcmsCIExyYFormat</code></td><td>0x00000003</td><td>CIE xyY</td></tr>
+<tr><td><code>XcmsCIELabFormat</code></td><td>0x00000004</td><td>CIE L*a*b*</td></tr>
+<tr><td><code>XcmsCIELuvFormat</code></td><td>0x00000005</td><td>CIE L*u*v*</td></tr>
+<tr><td><code>XcmsTekHVCFormat</code></td><td>0x00000006</td><td>TekHVC</td></tr>
+<tr><td><code>XcmsRGBFormat</code></td><td>0x80000000</td><td>RGB Device</td></tr>
+<tr><td><code>XcmsRGBiFormat</code></td><td>0x80000001</td><td>RGB Intensity</td></tr>
+</table>
+<p>32번째 비트(최상위)가 켜져 있으면 장비 의존 형식, 꺼져 있으면 장비 독립 형식이다. 31번째 비트가 켜져 있으면 실행 중에 Xlib에 추가된 색 공간인데, 이런 형식 값은 실행할 때마다 달라질 수 있다. 그래서 파일에 저장하는 등 프로그램 밖에서 가리킬 때는 숫자 대신 색 공간 접두어 문자열을 써야 한다(<code>XcmsFormatOfPrefix</code>, <code>XcmsPrefixOfFormat</code>).</p>
+<p>각 공간별 값 타입(<code>XcmsFloat</code>는 <code>double</code>)은 다음과 같다.</p>
+<table>
+<tr><th>구조체</th><th>멤버와 범위</th></tr>
+<tr><td><code>XcmsRGB</code></td><td><code>red</code>, <code>green</code>, <code>blue</code>: unsigned short, 0x0000~0xffff</td></tr>
+<tr><td><code>XcmsRGBi</code></td><td><code>red</code>, <code>green</code>, <code>blue</code>: 0.0~1.0</td></tr>
+<tr><td><code>XcmsCIEXYZ</code></td><td><code>X</code>, <code>Y</code>(0.0~1.0), <code>Z</code></td></tr>
+<tr><td><code>XcmsCIEuvY</code></td><td><code>u_prime</code>, <code>v_prime</code>(0.0~약 0.6), <code>Y</code>(0.0~1.0)</td></tr>
+<tr><td><code>XcmsCIExyY</code></td><td><code>x</code>(0.0~약 .75), <code>y</code>(0.0~약 .85), <code>Y</code>(0.0~1.0)</td></tr>
+<tr><td><code>XcmsCIELab</code></td><td><code>L_star</code>(0.0~100.0), <code>a_star</code>, <code>b_star</code></td></tr>
+<tr><td><code>XcmsCIELuv</code></td><td><code>L_star</code>(0.0~100.0), <code>u_star</code>, <code>v_star</code></td></tr>
+<tr><td><code>XcmsTekHVC</code></td><td><code>H</code>(0.0~360.0), <code>V</code>(0.0~100.0), <code>C</code>(0.0~100.0)</td></tr>
+<tr><td><code>XcmsPad</code></td><td>double 네 개(공용체 크기 확보용)</td></tr>
+</table>
+<p>장비 의존 형식 두 가지의 차이가 중요하다.</p>
+<ul>
+<li><b>RGB Intensity</b>(<code>XcmsRGBi</code>): 0.0~1.0의 <b>선형</b> 세기. 1.0이 최대, 0.5가 절반 세기. 감마 보정이 되지 <b>않은</b> 값이다.</li>
+<li><b>RGB Device</b>(<code>XcmsRGB</code>): 그 출력 장비에 맞는 값으로, 0~65535 unsigned short이며 <code>XColor</code>의 RGB와 그대로 바꿔 쓸 수 있다. 색 변환 결과로 나온 RGB Device 값은 항상 감마 보정이 되어 있고, 컬러맵에서 읽었거나 클라이언트가 넘긴 값도 Xlib는 감마 보정된 값으로 간주한다.</li>
+</ul>
+<p>이 매뉴얼에서 그냥 "RGB 값"이라고 하면 RGB Device 값을 뜻한다.</p>
+
+<h3>6.2 색 문자열 <small>(Color Strings)</small></h3>
+<p>Xlib는 색을 문자열로 지정하는 방법을 제공한다. 문자열은 <b>추상적인 색 이름</b>(예: <code>red</code>, <code>blue</code>)이거나 <b>숫자 색 지정</b>이다. 대소문자는 구분하지 않는다. 색 문자열을 받는 함수는 <code>XAllocNamedColor</code>, <code>XcmsAllocNamedColor</code>, <code>XLookupColor</code>, <code>XcmsLookupColor</code>, <code>XParseColor</code>, <code>XStoreNamedColor</code>다.</p>
+<p>색 이름은 색 이름 데이터베이스에서 찾는다. Xlib는 먼저 0개 이상의 <b>클라이언트 쪽</b> 데이터베이스를 찾고(개수·위치·내용은 구현에 따라 다르고 로캘에 따라 달라질 수 있다), 없으면 <b>X 서버의</b> 데이터베이스를 찾는다. 이름이 Host Portable Character Encoding(대략 ASCII 기본 문자) 밖의 문자를 쓰면 결과는 구현마다 다르다.</p>
+<p>숫자 지정은 다음 문법을 따른다.</p>
+<pre><code>&lt;색공간_이름&gt;:&lt;값&gt;/.../&lt;값&gt;
+
+"CIEXYZ:0.3227/0.28133/0.2493"
+"RGBi:1.0/0.0/0.0"
+"rgb:00/ff/00"
+"CIELuv:50.0/0.0/0.0"</code></pre>
+
+<h4>RGB Device 문자열</h4>
+<pre><code>rgb:&lt;red&gt;/&lt;green&gt;/&lt;blue&gt;
+    &lt;red&gt;, &lt;green&gt;, &lt;blue&gt; := h | hh | hhh | hhhh
+    h := 16진수 한 자리 (대소문자 무관)</code></pre>
+<p><code>h</code>는 4비트, <code>hh</code>는 8비트, <code>hhh</code>는 12비트, <code>hhhh</code>는 16비트로 <b>비율 환산(scaled)</b>된 값이다. 즉 <code>rgb:f/f/f</code>와 <code>rgb:ffff/ffff/ffff</code>는 둘 다 최대 밝기 흰색이다. 예: <code>"rgb:ea/75/52"</code>, <code>"rgb:ccc/320/320"</code>. 성분마다 자릿수가 달라도 된다(<code>"rgb:ff/a5/0"</code>, <code>"rgb:ccc/32/0"</code>).</p>
+<p>하위 호환을 위해 예전 문법 <code>#</code>도 지원하지만 권장하지 않는다.</p>
+<pre><code>#RGB            (각 4비트)
+#RRGGBB         (각 8비트)
+#RRRGGGBBB      (각 12비트)
+#RRRRGGGGBBBB   (각 16비트)</code></pre>
+<p>여기서는 16비트보다 짧게 쓰면 그 자리가 <b>상위 비트</b>가 된다(비율 환산이 아니다). 예를 들어 <code>"#3a7"</code>은 <code>"#3000a0007000"</code>과 같다.</p>
+<div class="tip">함정: <code>"#fff"</code>는 (0xf000, 0xf000, 0xf000)이라 완전한 흰색이 아니지만, <code>"rgb:f/f/f"</code>는 (0xffff, 0xffff, 0xffff)로 완전한 흰색이다. 정확한 색이 필요하면 <code>rgb:</code> 문법을 쓰거나 <code>#RRGGBB</code>처럼 자릿수를 충분히 쓴다(그래도 <code>#ffffff</code>는 0xff00이다).</div>
+
+<h4>RGB Intensity 문자열</h4>
+<pre><code>rgbi:&lt;red&gt;/&lt;green&gt;/&lt;blue&gt;</code></pre>
+<p>각 값은 0.0~1.0 부동소수점이다. 부호(선택), 소수점이 있을 수 있는 숫자열, 선택적인 지수부(<code>E</code> 또는 <code>e</code> 뒤에 부호 있는 정수)로 쓴다.</p>
+
+<h4>장비 독립 문자열</h4>
+<pre><code>CIEXYZ:&lt;X&gt;/&lt;Y&gt;/&lt;Z&gt;
+CIEuvY:&lt;u&gt;/&lt;v&gt;/&lt;Y&gt;
+CIExyY:&lt;x&gt;/&lt;y&gt;/&lt;Y&gt;
+CIELab:&lt;L&gt;/&lt;a&gt;/&lt;b&gt;
+CIELuv:&lt;L&gt;/&lt;u&gt;/&lt;v&gt;
+TekHVC:&lt;H&gt;/&lt;V&gt;/&lt;C&gt;</code></pre>
+<p>모든 값은 부동소수점이고 문법은 <code>rgbi:</code>와 같다.</p>
+
+<h3>6.3 색 변환 컨텍스트와 색역 매핑 <small>(Color Conversion Contexts and Gamut Mapping)</small> — 자주 쓰지 않아 요약만</h3>
+<p>Xlib가 장비 독립 색을 장비 의존 색으로(또는 반대로) 바꿀 때는 화면 하드웨어의 색 한계에 대한 정보(<b>장비 프로파일</b>)가 필요하다. 이 정보는 <b>색 변환 컨텍스트(CCC, Color Conversion Context)</b>에 들어 있다.</p>
+<ul>
+<li><b>색역 압축(gamut compression)</b>: 변환 결과가 화면이 낼 수 있는 색 범위(색역) 밖이면, 범위 안으로 끌어온다.</li>
+<li><b>화이트 조정(white adjustment)</b>: 화면 고유의 흰색 점과 클라이언트가 가정한 흰색 점(Client White Point)이 다르면 맞춘다.</li>
+</ul>
+<p>이 처리 방법은 CCC 안에 콜백으로 저장되고, 클라이언트가 콜백과 클라이언트 데이터, Client White Point를 정할 수 있다. Xlib는 이 두 가지 외의 색역 처리(예: 색역 확장)는 직접 지원하지 않지만 막지도 않는다.</p>
+<p>컬러맵마다 Xlib가 몰래 만들어 둔 초기 CCC가 붙어 있으므로, 함수에 컬러맵을 넘기면 간접적으로 CCC도 넘기는 셈이다. 화면마다 기본 CCC가 있고, 새로 만드는 CCC는 기본 CCC의 속성을 물려받는다.</p>
+<p>색역 매핑이 일어날 수 있는 Xcms 함수는 다음 <code>Status</code>를 돌려준다.</p>
+<table>
+<tr><td><code>XcmsFailure</code></td><td>실패</td></tr>
+<tr><td><code>XcmsSuccess</code></td><td>성공. 변환을 했다면 압축이 필요 없었다.</td></tr>
+<tr><td><code>XcmsSuccessWithCompression</code></td><td>성공했지만 적어도 한 색이 압축되었다.</td></tr>
+</table>
+
+<h3>6.4 컬러맵 만들기·복사·없애기 <small>(Creating, Copying, and Destroying Colormaps)</small></h3>
+<h4>XCreateColormap</h4>
+<pre><code>Colormap XCreateColormap(Display *display, Window w, Visual *visual, int alloc);</code></pre>
+<p>지정한 비주얼 종류의 새 컬러맵을 창 <code>w</code>가 있는 화면에 만들고 ID를 돌려준다.</p>
+<ul>
+<li><code>w</code>: <b>화면을 정하는 용도로만</b> 쓰인다. 이 창에 컬러맵이 붙는 것이 아니다. 창에 붙이려면 <code>XSetWindowColormap</code> 등을 따로 불러야 한다.</li>
+<li><code>visual</code>: 그 화면이 지원하는 비주얼이어야 한다. 아니면 <code>BadMatch</code>.</li>
+<li><code>alloc</code>: <code>AllocNone</code> 또는 <code>AllocAll</code>.</li>
+</ul>
+<p>초기 값은 비주얼 종류에 따라 다르다.</p>
+<table>
+<tr><th>비주얼</th><th>초기 칸 값</th><th>alloc</th></tr>
+<tr><td><code>GrayScale</code>, <code>PseudoColor</code>, <code>DirectColor</code></td><td>정의되지 않음</td><td><code>AllocNone</code>이면 할당된 칸이 없는 상태로 시작해 클라이언트가 할당한다.</td></tr>
+<tr><td><code>StaticGray</code>, <code>StaticColor</code>, <code>TrueColor</code></td><td>정해져 있지만 비주얼마다 다르고 X가 정의하지 않음</td><td>반드시 <code>AllocNone</code>. 아니면 <code>BadMatch</code>.</td></tr>
+</table>
+<p><code>AllocAll</code>이면 컬러맵 전체가 쓰기 가능으로 할당되고 값은 정의되지 않는다. <code>GrayScale</code>/<code>PseudoColor</code>에서는 <code>XAllocColorCells</code>가 0~N-1 픽셀을 모두 돌려준 것과 같고(N은 비주얼의 colormap entries), <code>DirectColor</code>에서는 <code>XAllocColorPlanes</code>가 픽셀 0과 비주얼의 마스크와 같은 <code>red_mask</code>/<code>green_mask</code>/<code>blue_mask</code>를 돌려준 것과 같다. 어느 경우든 이 칸들은 <code>XFreeColors</code>로 해제할 수 <b>없다</b>.</p>
+<p>오류: <code>BadAlloc</code>, <code>BadMatch</code>, <code>BadValue</code>, <code>BadWindow</code>.</p>
+<pre><code>/* 자기만의 PseudoColor 컬러맵을 만들어 창에 붙이는 예 */
+Visual *vis = DefaultVisual(dpy, scr);
+Colormap cmap = XCreateColormap(dpy, RootWindow(dpy, scr), vis, AllocNone);
+XSetWindowColormap(dpy, win, cmap);</code></pre>
+
+<h4>XCopyColormapAndFree</h4>
+<pre><code>Colormap XCopyColormapAndFree(Display *display, Colormap colormap);</code></pre>
+<p>공유 컬러맵(보통 기본 컬러맵)에서 칸이 모자라 할당이 실패했을 때, 내가 이미 할당한 칸들을 그대로 가지고 새 컬러맵으로 "이사"하는 함수다.</p>
+<ul>
+<li>같은 비주얼, 같은 화면의 새 컬러맵을 만들어 ID를 돌려준다.</li>
+<li>이 클라이언트가 원래 컬러맵에 할당해 둔 칸을 색 값과 읽기 전용/쓰기 가능 성질을 유지한 채 새 맵으로 옮기고, 원래 맵에서는 해제한다. 새 맵의 나머지 칸 값은 정의되지 않는다.</li>
+<li>원래 맵이 <code>AllocAll</code>로 만들어졌다면 새 맵도 <code>AllocAll</code>로 만들고 모든 칸 값을 복사한 뒤 원래 맵의 칸을 모두 해제한다.</li>
+<li>그렇지 않다면 옮기는 대상은 <code>XAllocColor</code>, <code>XAllocNamedColor</code>, <code>XAllocColorCells</code>, <code>XAllocColorPlanes</code>로 할당하고 아직 해제하지 않은 픽셀과 플레인이다.</li>
+</ul>
+<p>오류: <code>BadAlloc</code>, <code>BadColor</code>.</p>
+<div class="tip">새 컬러맵을 받은 뒤에는 창에 붙이고(<code>XSetWindowColormap</code>) 이후 할당도 새 맵에서 해야 한다. 이 창은 그 컬러맵이 설치되지 않으면 다른 창들과 색이 어긋나 보이는데("컬러맵 깜빡임"), 그 대가로 색을 더 얻는 것이다.</div>
+
+<h4>XFreeColormap</h4>
+<pre><code>XFreeColormap(Display *display, Colormap colormap);</code></pre>
+<p>컬러맵 ID와 컬러맵의 연결을 끊고 저장 공간을 해제한다.</p>
+<ul>
+<li>화면의 <b>기본 컬러맵에는 효과가 없다.</b></li>
+<li>설치된 컬러맵이면 먼저 설치 해제된다(<code>XUninstallColormap</code>).</li>
+<li>어떤 창의 컬러맵으로 지정되어 있었다면(<code>XCreateWindow</code>, <code>XSetWindowColormap</code>, <code>XChangeWindowAttributes</code>), 그 창의 컬러맵을 <code>None</code>으로 바꾸고 <code>ColormapNotify</code> 이벤트를 만든다. 컬러맵이 <code>None</code>인 창이 어떤 색으로 보일지는 X가 정의하지 않는다.</li>
+</ul>
+<p>오류: <code>BadColor</code>.</p>
+
+<h3>6.5 색 이름을 값으로 바꾸기 <small>(Mapping Color Names to Values)</small></h3>
+<p>이 절의 함수들은 <b>색을 할당하지 않는다.</b> 문자열을 해석해 RGB(또는 다른 형식) 값만 알려 준다. 칸을 얻으려면 그 결과를 <code>XAllocColor</code>에 넘기거나, 이름을 바로 받는 <code>XAllocNamedColor</code>를 쓴다.</p>
+
+<h4>XLookupColor</h4>
+<pre><code>Status XLookupColor(Display *display, Colormap colormap, char *color_name,
+                    XColor *exact_def_return, XColor *screen_def_return);</code></pre>
+<p>색 이름을 컬러맵의 화면 기준으로 찾아 <b>정확한 값</b>과 <b>하드웨어가 낼 수 있는 가장 가까운 값</b> 둘 다 돌려준다.</p>
+<ul>
+<li><code>exact_def_return</code>: 데이터베이스에 있는 정확한 RGB.</li>
+<li><code>screen_def_return</code>: 컬러맵의 비주얼 종류를 기준으로 화면이 실제로 낼 수 있는 가장 가까운 RGB.</li>
+<li>대소문자 무관. 이름을 찾으면 0이 아닌 값, 못 찾으면 0을 돌려준다.</li>
+</ul>
+<p>오류: <code>BadColor</code>.</p>
+
+<h4>XParseColor</h4>
+<pre><code>Status XParseColor(Display *display, Colormap colormap, char *spec, XColor *exact_def_return);</code></pre>
+<p>색 문자열을 해석해 <b>정확한 값</b>만 돌려준다. 실무에서 가장 많이 쓰는 해석 함수다.</p>
+<ul>
+<li><code>spec</code>: 색 이름(<code>"navy"</code>)이나 숫자 지정(<code>"rgb:00/00/80"</code>, <code>"#000080"</code> 등). 대소문자 무관.</li>
+<li><code>exact_def_return</code>: 정확한 RGB가 들어오고 <code>DoRed</code>, <code>DoGreen</code>, <code>DoBlue</code> 플래그가 켜진다. 그래서 그대로 <code>XStoreColor</code>에 넘기기 좋다.</li>
+<li><code>colormap</code>은 어느 화면 기준으로 찾을지 정하는 데 쓰인다. 칸을 할당하지 않는다.</li>
+<li>성공하면 0이 아닌 값, 실패하면 0.</li>
+</ul>
+<p>오류: <code>BadColor</code>.</p>
+<pre><code>/* 사용자가 준 색 문자열(명령행 등)로 픽셀 값 얻기: 해석 + 할당 */
+#include &lt;stdio.h&gt;
+#include &lt;X11/Xlib.h&gt;
+
+unsigned long get_pixel(Display *dpy, Colormap cmap, const char *spec,
+                        unsigned long fallback)
+{
+    XColor c;
+    if (!XParseColor(dpy, cmap, (char *)spec, &amp;c)) {
+        fprintf(stderr, "모르는 색: %s\n", spec);
+        return fallback;
+    }
+    if (!XAllocColor(dpy, cmap, &amp;c)) {
+        fprintf(stderr, "색 칸 할당 실패: %s\n", spec);
+        return fallback;
+    }
+    return c.pixel;
+}</code></pre>
+
+<h4>XcmsLookupColor (요약)</h4>
+<pre><code>Status XcmsLookupColor(Display *display, Colormap colormap, char *color_string,
+                       XcmsColor *color_exact_return, XcmsColor *color_screen_return,
+                       XcmsColorFormat result_format);</code></pre>
+<p><code>XLookupColor</code>와 같지만 결과를 <code>result_format</code> 형식으로 돌려준다. <code>result_format</code>이 <code>XcmsUndefinedFormat</code>이면, 숫자 지정 문자열은 그 문자열이 쓴 형식으로, 색 이름은 데이터베이스에 저장된 형식으로 돌려준다. 찾으면 <code>XcmsSuccess</code> 또는 <code>XcmsSuccessWithCompression</code>(이때 <code>color_screen_return</code>은 색역 압축 결과), 못 찾으면 <code>XcmsFailure</code>.</p>
+
+<h3>6.6 컬러 셀 할당과 해제 <small>(Allocating and Freeing Color Cells)</small></h3>
+<p>할당 방법은 두 가지다. 읽기 전용 칸을 <b>한 번에 하나씩</b> 받거나, 읽기/쓰기 칸과 플레인을 <b>여러 개 한꺼번에</b> 받는다.</p>
+<ul>
+<li>읽기 전용 칸은 RGB 값을 서버가 정하고 클라이언트끼리 공유된다. 서버는 할당·해제를 <b>횟수로 센다</b>. 마지막 클라이언트가 해제해야 실제로 비워진다. 같은 클라이언트가 같은 칸을 여러 번 할당해도 매번 센다.</li>
+<li>읽기/쓰기 칸은 처음에 색이 정해져 있지 않아 다음 절의 함수로 값을 써 넣어야 한다. 다른 클라이언트도 기술적으로는 그 칸에 값을 쓸 수 있지만, 보통 할당한 클라이언트 전용으로 여긴다.</li>
+</ul>
+
+<h4>XAllocColor</h4>
+<pre><code>Status XAllocColor(Display *display, Colormap colormap, XColor *screen_in_out);</code></pre>
+<p>원하는 RGB에 <b>가장 가까운</b>, 하드웨어가 지원하는 색으로 읽기 전용 칸을 할당한다.</p>
+<ul>
+<li><code>screen_in_out</code>: 들어갈 때 <code>red</code>/<code>green</code>/<code>blue</code>에 원하는 값을 넣는다. 나올 때 <code>pixel</code>에 픽셀 값이, RGB에 <b>실제로 쓰인 값</b>이 들어 있다(하드웨어 한계 때문에 요청과 다를 수 있다).</li>
+<li><code>flags</code>는 쓰지도 바꾸지도 않는다.</li>
+<li>같은 실효 RGB를 요청한 여러 클라이언트는 같은 칸을 받을 수 있다(공유).</li>
+<li>성공하면 0이 아닌 값, 실패하면 0. 실패는 보통 컬러맵에 빈 칸이 없을 때다.</li>
+</ul>
+<p>오류: <code>BadColor</code>.</p>
+<pre><code>XColor c;
+c.red = 0xffff; c.green = 0x8000; c.blue = 0;   /* 주황 */
+if (XAllocColor(dpy, DefaultColormap(dpy, scr), &amp;c))
+    XSetForeground(dpy, gc, c.pixel);
+else
+    XSetForeground(dpy, gc, BlackPixel(dpy, scr));  /* 대체 색 */</code></pre>
+<div class="tip">
+<ul>
+<li>반환값을 꼭 확인한다. 8비트 화면에서는 기본 컬러맵이 금방 차서 실패한다. 실패 대비로 <code>BlackPixel</code>/<code>WhitePixel</code> 같은 대체 색을 준비하거나 <code>XCopyColormapAndFree</code>로 옮긴다.</li>
+<li>더 이상 안 쓰는 색은 <code>XFreeColors</code>로 돌려준다. 같은 색을 반복해서 할당하면 그만큼 해제도 해야 한다(횟수를 센다).</li>
+<li>나온 RGB가 요청과 다를 수 있으니 정확한 비교가 필요하면 반환된 값을 쓴다.</li>
+</ul>
+</div>
+
+<h4>XcmsAllocColor (요약)</h4>
+<pre><code>Status XcmsAllocColor(Display *display, Colormap colormap, XcmsColor *color_in_out,
+                      XcmsColorFormat result_format);</code></pre>
+<p>색을 아무 형식으로나 지정할 수 있는 <code>XAllocColor</code>다. 지정한 색을 RGB로 바꿔 결국 <code>XAllocColor</code>를 부르고, 픽셀 값과 실제로 할당된 색(받은 RGB를 <code>result_format</code>으로 되돌린 값)을 돌려준다. 돌려받을 색이 필요 없으면 <code>result_format</code>을 <code>XcmsRGBFormat</code>으로 주면 불필요한 계산을 건너뛴다. <code>XcmsFailure</code>면 <code>color_in_out</code>은 바뀌지 않는다. 오류: <code>BadColor</code>.</p>
+
+<h4>XAllocNamedColor</h4>
+<pre><code>Status XAllocNamedColor(Display *display, Colormap colormap, char *color_name,
+                        XColor *screen_def_return, XColor *exact_def_return);</code></pre>
+<p>색 이름으로 바로 읽기 전용 칸을 할당한다. 해석과 할당을 한 번에 한다.</p>
+<ul>
+<li><code>screen_def_return</code>: 할당된 칸의 <b>픽셀 값</b>과 화면이 실제로 내는 가장 가까운 RGB.</li>
+<li><code>exact_def_return</code>: 데이터베이스의 정확한 RGB.</li>
+<li>대소문자 무관. 칸을 할당하면 0이 아닌 값, 아니면 0.</li>
+<li>두 포인터가 같은 구조체를 가리키면 <code>pixel</code>은 제대로 들어가지만 색 값은 정의되지 않는다.</li>
+</ul>
+<p>오류: <code>BadColor</code>.</p>
+<pre><code>XColor screen, exact;
+if (XAllocNamedColor(dpy, cmap, "SkyBlue", &amp;screen, &amp;exact)) {
+    XSetForeground(dpy, gc, screen.pixel);   /* 픽셀은 screen 쪽에! */
+}</code></pre>
+<div class="tip">함정: 인자 순서가 <code>XLookupColor</code>와 <b>반대</b>다. <code>XLookupColor</code>는 (exact, screen), <code>XAllocNamedColor</code>는 (screen, exact)다. 픽셀 값은 <code>screen_def_return</code>에 들어온다. <code>exact_def_return.pixel</code>을 쓰면 엉뚱한 값이다.</div>
+
+<h4>XcmsAllocNamedColor (요약)</h4>
+<pre><code>Status XcmsAllocNamedColor(Display *display, Colormap colormap, char *color_string,
+                           XcmsColor *color_screen_return, XcmsColor *color_exact_return,
+                           XcmsColorFormat result_format);</code></pre>
+<p><code>XAllocNamedColor</code>의 Xcms판이다. 문자열을 <code>XcmsColor</code>로 해석해(<code>XcmsLookupColor</code>처럼) RGB로 바꾼 뒤 <code>XAllocColor</code>를 부른다. 정확한 지정과 실제 저장된 지정을 <code>result_format</code>으로 돌려준다. <code>result_format</code>, 같은 구조체를 넘겼을 때의 주의점은 앞의 함수들과 같다. 오류: <code>BadColor</code>.</p>
+
+<h4>XAllocColorCells</h4>
+<pre><code>Status XAllocColorCells(Display *display, Colormap colormap, Bool contig,
+                        unsigned long plane_masks_return[], unsigned int nplanes,
+                        unsigned long pixels_return[], unsigned int npixels);</code></pre>
+<p><code>PseudoColor</code> 같은 모델에서 <b>읽기/쓰기</b> 칸과 플레인 조합을 할당한다. 색을 나중에 바꾸고 싶을 때(컬러맵 애니메이션, 팔레트 편집기 등) 쓴다.</p>
+<ul>
+<li>색 수(<code>npixels</code>)는 양수, 플레인 수(<code>nplanes</code>)는 0 이상이어야 한다. 아니면 <code>BadValue</code>.</li>
+<li><code>npixels</code>개의 픽셀과 <code>nplanes</code>개의 플레인 마스크를 돌려준다. 어떤 마스크도 다른 마스크나 픽셀과 1인 비트를 공유하지 않는다.</li>
+<li>각 픽셀에 마스크를 0개 이상 OR 해서 <code>npixels × 2<sup>nplanes</sup></code>개의 서로 다른 픽셀을 만들 수 있고, 이것들이 모두 쓰기 가능으로 할당된다.</li>
+<li><code>GrayScale</code>/<code>PseudoColor</code>에서 각 마스크는 비트가 정확히 1개, <code>DirectColor</code>에서는 정확히 3개다.</li>
+<li><code>contig</code>가 <code>True</code>면, 마스크를 모두 OR 했을 때 <code>GrayScale</code>/<code>PseudoColor</code>에서는 연속된 비트 한 묶음, <code>DirectColor</code>에서는 픽셀 하위 필드마다 하나씩 연속된 세 묶음이 된다.</li>
+<li>할당된 칸의 RGB는 정의되지 않는다. 성공하면 0이 아닌 값, 실패하면 0.</li>
+</ul>
+<p>오류: <code>BadColor</code>, <code>BadValue</code>.</p>
+<pre><code>/* 쓰기 가능 칸 4개를 받아 색을 직접 채운다 (PseudoColor 화면 가정) */
+unsigned long pix[4];
+if (XAllocColorCells(dpy, cmap, False, NULL, 0, pix, 4)) {
+    XColor c[4];
+    for (int i = 0; i &lt; 4; i++) {
+        c[i].pixel = pix[i];
+        c[i].red = c[i].green = c[i].blue = (unsigned short)(i * 0x5555);
+        c[i].flags = DoRed | DoGreen | DoBlue;
+    }
+    XStoreColors(dpy, cmap, c, 4);
+}</code></pre>
+<div class="tip"><code>TrueColor</code>나 <code>StaticColor</code>처럼 정적 비주얼의 컬러맵에는 쓰기 가능 칸이 없으므로 이 함수는 실패한다. 요즘의 24비트 화면에서 기본 컬러맵에 쓰면 거의 항상 실패한다고 보면 된다.</div>
+
+<h4>XAllocColorPlanes</h4>
+<pre><code>Status XAllocColorPlanes(Display *display, Colormap colormap, Bool contig,
+                         unsigned long pixels_return[], int ncolors,
+                         int nreds, int ngreens, int nblues,
+                         unsigned long *rmask_return, unsigned long *gmask_return,
+                         unsigned long *bmask_return);</code></pre>
+<p><code>DirectColor</code> 모델용으로 빨강·초록·파랑 플레인을 따로 할당한다.</p>
+<ul>
+<li><code>ncolors</code>는 양수, <code>nreds</code>/<code>ngreens</code>/<code>nblues</code>는 0 이상. 아니면 <code>BadValue</code>.</li>
+<li>픽셀 <code>ncolors</code>개를 돌려주고, 세 마스크에는 각각 <code>nreds</code>, <code>ngreens</code>, <code>nblues</code>개의 비트가 켜져 있다. <code>contig</code>가 <code>True</code>면 각 마스크의 비트가 연속된다. 마스크끼리, 마스크와 픽셀은 비트를 공유하지 않고, <code>DirectColor</code>에서 각 마스크는 해당 하위 필드 안에 있다.</li>
+<li>만들 수 있는 픽셀은 <code>ncolors × 2<sup>(nreds+ngreens+nblues)</sup></code>개로 모두 할당되지만, 컬러맵 안의 독립 항목은 빨강 <code>ncolors × 2<sup>nreds</sup></code>개, 초록 <code>ncolors × 2<sup>ngreens</sup></code>개, 파랑 <code>ncolors × 2<sup>nblues</sup></code>개뿐이다. <code>PseudoColor</code>에서도 마찬가지다.</li>
+<li><code>XStoreColors</code>/<code>XStoreColor</code>/<code>XStoreNamedColor</code>로 칸을 바꾸면 픽셀이 마스크에 따라 분해되고 해당 독립 항목들이 갱신된다.</li>
+<li>성공하면 0이 아닌 값, 실패하면 0.</li>
+</ul>
+<p>오류: <code>BadColor</code>, <code>BadValue</code>.</p>
+
+<h4>XFreeColors</h4>
+<pre><code>XFreeColors(Display *display, Colormap colormap, unsigned long pixels[],
+            int npixels, unsigned long planes);</code></pre>
+<p>할당했던 칸을 해제한다.</p>
+<ul>
+<li><code>planes</code>는 어떤 픽셀과도 1 비트를 공유하면 안 된다. 해제 대상은 <code>planes</code>의 부분집합을 각 픽셀에 OR 해서 만든 모든 픽셀이다. 읽기 전용 칸만 해제할 때는 <code>planes</code>에 0을 준다.</li>
+<li>이 클라이언트가 <code>XAllocColor</code>, <code>XAllocNamedColor</code>, <code>XAllocColorCells</code>, <code>XAllocColorPlanes</code>로 할당한 것만 해제된다.</li>
+<li><code>XAllocColorPlanes</code>로 받은 픽셀 하나를 해제해도, 관련 픽셀이 모두 해제될 때까지 재사용되지 않을 수 있다.</li>
+<li>읽기 전용 칸은 모든 클라이언트가 해제해야 실제로 해제되고, 한 클라이언트가 여러 번 할당했다면 그만큼 해제해야 한다.</li>
+<li>일부 픽셀이 오류를 내도 나머지 유효한 픽셀은 모두 해제된다. 유효한 인덱스가 아니면 <code>BadValue</code>, 이 클라이언트가 할당하지 않은 칸이거나 <code>AllocAll</code>로 만든 컬러맵이면 <code>BadAccess</code>. 오류가 여럿이면 어느 것이 보고될지는 정해져 있지 않다.</li>
+</ul>
+<p>오류: <code>BadAccess</code>, <code>BadColor</code>, <code>BadValue</code>.</p>
+<pre><code>unsigned long p = c.pixel;
+XFreeColors(dpy, cmap, &amp;p, 1, 0);</code></pre>
+<div class="tip"><code>BlackPixel</code>/<code>WhitePixel</code>로 얻은 값처럼 내가 할당하지 않은 픽셀을 넘기면 <code>BadAccess</code>가 난다. 할당한 픽셀만 따로 목록에 모아 두었다가 해제하는 것이 안전하다.</div>
+
+<h3>6.7 컬러맵 칸 수정과 조회 <small>(Modifying and Querying Colormap Cells)</small></h3>
+<h4>XStoreColor, XStoreColors</h4>
+<pre><code>XStoreColor(Display *display, Colormap colormap, XColor *color);
+XStoreColors(Display *display, Colormap colormap, XColor color[], int ncolors);</code></pre>
+<p><b>쓰기 가능</b> 칸의 RGB를 바꾼다. 어느 칸인지는 <code>XColor</code>의 <code>pixel</code>로, 어느 성분을 바꿀지는 <code>flags</code>(<code>DoRed</code>|<code>DoGreen</code>|<code>DoBlue</code>)로 정한다. 컬러맵이 설치되어 있으면 변화가 <b>즉시</b> 화면에 보인다. 이 성질 덕에 픽셀을 다시 그리지 않고 컬러맵만 바꿔 화면 전체 색을 바꾸는 "컬러맵 애니메이션"이 가능하다.</p>
+<ul>
+<li>유효하지 않은 인덱스면 <code>BadValue</code>, 할당되지 않았거나 읽기 전용 칸이면 <code>BadAccess</code>.</li>
+<li><code>XStoreColors</code>는 일부가 오류를 내도 어느 클라이언트든 쓰기 가능으로 할당한 칸이면 바꾼다. 오류가 여럿이면 보고되는 것은 임의다.</li>
+</ul>
+<p>오류: <code>BadAccess</code>, <code>BadColor</code>, <code>BadValue</code>.</p>
+<div class="tip"><code>flags</code>를 0으로 두면 아무 성분도 바뀌지 않는다. 지역 변수 <code>XColor</code>를 쓸 때 초기화를 잊기 쉽다.</div>
+
+<h4>XStoreNamedColor</h4>
+<pre><code>XStoreNamedColor(Display *display, Colormap colormap, char *color,
+                 unsigned long pixel, int flags);</code></pre>
+<p>색 이름을 찾아 그 값을 <code>pixel</code> 칸에 저장한다. <code>flags</code>는 <code>DoRed</code>, <code>DoGreen</code>, <code>DoBlue</code>의 OR. 대소문자 무관. 유효하지 않은 인덱스면 <code>BadValue</code>, 할당되지 않았거나 읽기 전용이면 <code>BadAccess</code>. 오류: <code>BadAccess</code>, <code>BadColor</code>, <code>BadName</code>, <code>BadValue</code>.</p>
+
+<h4>XcmsStoreColor, XcmsStoreColors (요약)</h4>
+<pre><code>Status XcmsStoreColor(Display *display, Colormap colormap, XcmsColor *color);
+Status XcmsStoreColors(Display *display, Colormap colormap, XcmsColor colors[],
+                       int ncolors, Bool compression_flags_return[]);</code></pre>
+<p>아무 형식의 색을 RGB로 바꾼 뒤, 세 플래그를 모두 켠 <code>XColor</code>로 <code>XStoreColor</code>/<code>XStoreColors</code>를 부른다. 넘긴 값은 바뀌지 않는다. <code>XStoreColor</code>는 반환값이 없으므로 <code>XcmsSuccess</code>는 "RGB 변환에 성공했고 저장 요청을 보냈다"는 뜻일 뿐이다. 실제 저장된 색은 <code>XcmsQueryColor(s)</code>로 확인한다(하드웨어 한계나 색역 압축 때문에 다를 수 있다). <code>compression_flags_return</code>이 NULL이 아니면 색마다 압축 여부가 들어온다. 오류는 위와 같다.</p>
+
+<h4>XQueryColor, XQueryColors</h4>
+<pre><code>XQueryColor(Display *display, Colormap colormap, XColor *def_in_out);
+XQueryColors(Display *display, Colormap colormap, XColor defs_in_out[], int ncolors);</code></pre>
+<p><code>pixel</code>에 넣은 픽셀 값의 현재 RGB를 컬러맵에서 읽어 구조체에 채우고, <code>flags</code>를 세 성분 모두로 설정한다. 할당되지 않은 칸의 값은 정의되지 않는다. 유효하지 않은 인덱스면 <code>BadValue</code>. 오류: <code>BadColor</code>, <code>BadValue</code>.</p>
+<pre><code>/* XGetImage로 얻은 픽셀 값을 실제 RGB로 바꿀 때 자주 쓴다 */
+XColor q;
+q.pixel = some_pixel;
+XQueryColor(dpy, DefaultColormap(dpy, scr), &amp;q);
+printf("R=%u G=%u B=%u\n", q.red &gt;&gt; 8, q.green &gt;&gt; 8, q.blue &gt;&gt; 8);</code></pre>
+
+<h4>XcmsQueryColor, XcmsQueryColors (요약)</h4>
+<pre><code>Status XcmsQueryColor(Display *display, Colormap colormap, XcmsColor *color_in_out,
+                      XcmsColorFormat result_format);
+Status XcmsQueryColors(Display *display, Colormap colormap, XcmsColor colors_in_out[],
+                       unsigned int ncolors, XcmsColorFormat result_format);</code></pre>
+<p>칸의 RGB를 읽어 <code>result_format</code>으로 바꿔 돌려준다. 오류: <code>BadColor</code>, <code>BadValue</code>.</p>
+
+<h3>6.8~6.13 Xcms 고급 기능 — 자주 쓰지 않아 요약만</h3>
+<h4>색 변환 컨텍스트(CCC) 함수</h4>
+<p>클라이언트가 바꿀 수 있는 CCC 속성은 Client White Point, 색역 압축 프로시저와 그 데이터, 화이트 포인트 조정 프로시저와 그 데이터다. 초기값은 구현마다 다르다. <code>XcmsCCC</code> 내부는 직접 건드리지 말고 함수·매크로를 쓴다.</p>
+<table>
+<tr><th>함수</th><th>하는 일</th></tr>
+<tr><td><code>XcmsCCC XcmsCCCOfColormap(Display *display, Colormap colormap)</code></td><td>컬러맵에 붙은 CCC를 얻는다.</td></tr>
+<tr><td><code>XcmsCCC XcmsSetCCCOfColormap(Display *display, Colormap colormap, XcmsCCC ccc)</code></td><td>컬러맵의 CCC를 바꾸고 이전 CCC를 돌려준다(안 쓸 거면 <code>XcmsFreeCCC</code>). 여러 컬러맵이 CCC를 공유해도 되지만 Xlib는 새 컬러맵마다 새 CCC를 만든다.</td></tr>
+<tr><td><code>XcmsCCC XcmsDefaultCCC(Display *display, int screen_number)</code></td><td>화면의 기본 CCC(비주얼은 기본 비주얼). 이것을 바꾸면 이후 만드는 CCC에 반영된다.</td></tr>
+<tr><td><code>DisplayOfCCC</code>/<code>XcmsDisplayOfCCC</code>, <code>VisualOfCCC</code>/<code>XcmsVisualOfCCC</code>, <code>ScreenNumberOfCCC</code>/<code>XcmsScreenNumberOfCCC</code>, <code>ScreenWhitePointOfCCC</code>/<code>XcmsScreenWhitePointOfCCC</code>, <code>ClientWhitePointOfCCC</code>/<code>XcmsClientWhitePointOfCCC</code></td><td>CCC의 디스플레이, 비주얼, 화면 번호, 화면 흰색 점, 클라이언트 흰색 점을 얻는 매크로와 같은 기능의 함수.</td></tr>
+<tr><td><code>Status XcmsSetWhitePoint(XcmsCCC ccc, XcmsColor *color)</code></td><td>Client White Point 설정. 형식은 <code>XcmsCIEXYZFormat</code>, <code>XcmsCIEuvYFormat</code>, <code>XcmsCIExyYFormat</code>, <code>XcmsUndefinedFormat</code>만 된다. NULL이면 화면 흰색 점과 같다고 본다.</td></tr>
+<tr><td><code>XcmsSetCompressionProc(ccc, compression_proc, client_data)</code></td><td>색역 압축 프로시저를 바꾸고 이전 것을 돌려준다. NULL이면 색역 밖 색을 만났을 때 함수가 <code>XcmsFailure</code>를 돌려준다.</td></tr>
+<tr><td><code>XcmsSetWhiteAdjustProc(ccc, white_adjust_proc, client_data)</code></td><td>화이트 조정 프로시저를 바꾸고 이전 것을 돌려준다.</td></tr>
+<tr><td><code>XcmsCreateCCC(display, screen_number, visual, client_white_point, compression_proc, compression_client_data, white_adjust_proc, white_adjust_client_data)</code></td><td>CCC를 직접 만든다. CCC 인자를 받는 함수에 쓴다.</td></tr>
+<tr><td><code>void XcmsFreeCCC(XcmsCCC ccc)</code></td><td>CCC 해제.</td></tr>
+</table>
+
+<h4>색 공간 변환</h4>
+<pre><code>Status XcmsConvertColors(XcmsCCC ccc, XcmsColor colors_in_out[], unsigned int ncolors,
+                         XcmsColorFormat target_format, Bool compression_flags_return[]);</code></pre>
+<p>여러 형식이 섞인 색 배열을 하나의 목표 형식으로 바꾼다. <code>pixel</code>은 무시된다. 장비 독립 공간끼리 바꿀 때는 CCC가 Client White Point를 정하는 데만 쓰인다. 장비 독립과 장비 의존이 섞여 있고 목표가 장비 의존 형식이면, 모두 CIE XYZ를 거쳐 바뀐다. 실패하면 배열은 그대로다.</p>
+
+<h4>콜백</h4>
+<p>색역 압축 콜백(<code>XcmsCompressionProc</code>)은 CIE XYZ에서 장비 의존 형식(보통 <code>XcmsRGBi</code>)으로 바꿀 때 색역 밖 색이 나오면 불린다. 이때 받는 색은 이미 화면 흰색 점 기준으로 조정된 CIE XYZ이고, 고친다면 CIE XYZ로 돌려줘야 한다. 화이트 조정 콜백(<code>XcmsWhiteAdjustProc</code>)은 장비 독립↔장비 의존 변환 중 Client White Point와 Screen White Point가 다를 때 불린다(예: <code>XcmsAllocColor</code>는 RGB로 갈 때와 되돌릴 때 두 번 부른다). Xlib가 제공하는 것은 다음과 같다. 모두 클라이언트 데이터가 필요 없다.</p>
+<ul>
+<li>색역 압축: <code>XcmsCIELabClipL</code>(L*을 조정, 필요하면 최대 채도로 자름), <code>XcmsCIELabClipab</code>(색상각 유지하며 채도 감소), <code>XcmsCIELabClipLab</code>(색상각 유지, 원래 좌표와 가장 가까운 색역 안 점), 같은 방식의 <code>XcmsCIELuvClipL</code>, <code>XcmsCIELuvClipuv</code>, <code>XcmsCIELuvClipLuv</code>, 그리고 TekHVC용 <code>XcmsTekHVCClipV</code>, <code>XcmsTekHVCClipC</code>, <code>XcmsTekHVCClipVC</code>.</li>
+<li>화이트 조정: <code>XcmsCIELabWhiteShiftColors</code>, <code>XcmsCIELuvWhiteShiftColors</code>, <code>XcmsTekHVCWhiteShiftColors</code>.</li>
+</ul>
+
+<h4>색역 질의</h4>
+<p>화면 색역의 경계를 CIE L*a*b*, CIE L*u*v*, TekHVC로 물어보는 함수들이다. 여기서 쓰는 흰색 점은 Screen White Point로 가정한다.</p>
+<ul>
+<li><code>XcmsQueryBlack</code>, <code>XcmsQueryWhite</code>, <code>XcmsQueryRed</code>, <code>XcmsQueryGreen</code>, <code>XcmsQueryBlue</code>: <code>(XcmsCCC ccc, XcmsColorFormat target_format, XcmsColor *color_return)</code> — 검정(세 성분 0), 흰색(세 성분 최대), 순수 빨강·초록·파랑을 원하는 형식으로.</li>
+<li>이름 규칙 <code>Xcms&lt;색공간&gt;QueryMax&lt;차원&gt;</code>/<code>QueryMin&lt;차원&gt;</code>: &lt;차원&gt;은 고정되지 않은(찾는) 축이다. 예: <code>XcmsTekHVCQueryMaxC</code>는 색상(H)과 명도(V)를 고정하고 최대 채도(C)를 찾는다.</li>
+<li>L*a*b*: <code>XcmsCIELabQueryMaxC</code>, <code>XcmsCIELabQueryMaxL</code>, <code>XcmsCIELabQueryMaxLC</code>, <code>XcmsCIELabQueryMinL</code>. L*u*v*: 같은 이름의 <code>XcmsCIELuv...</code> 네 개. TekHVC: <code>XcmsTekHVCQueryMaxC</code>, <code>XcmsTekHVCQueryMaxV</code>, <code>XcmsTekHVCQueryMaxVC</code>, <code>XcmsTekHVCQueryMaxVSamples</code>, <code>XcmsTekHVCQueryMinV</code>.</li>
+</ul>
+
+<h4>색 관리 확장</h4>
+<p>Xcms는 두 방향으로 확장할 수 있다. CIE XYZ를 모든 변환의 중심(hub)으로 삼기 때문에, 새 색 공간은 "CIE XYZ로 가는 변환 함수 배열"과 "CIE XYZ에서 오는 변환 함수 배열"만 주면 붙일 수 있다(가능하면 지름길도 쓴다. 예: TekHVC→L*u*v*는 XYZ를 거치지 않고 u'v'Y를 거친다).</p>
+<ul>
+<li><code>Status XcmsAddColorSpace(XcmsColorSpace *color_space)</code>: CIE XYZ로 환산 가능한 장비 독립 색 공간 추가. 구조체에는 접두어, 형식, 문자열 해석 콜백(<code>XcmsParseStringProc</code>), 변환 함수 목록이 들어간다.</li>
+<li><code>XcmsColorFormat XcmsFormatOfPrefix(char *prefix)</code>, <code>char *XcmsPrefixOfFormat(XcmsColorFormat format)</code>: 접두어 문자열과 형식 값을 서로 바꾼다.</li>
+<li><code>Status XcmsAddFunctionSet(XcmsFunctionSet *function_set)</code>: 특정 출력 장비 종류를 위한 장비 의존 색 공간과 XYZ 변환 함수 묶음(Color Characterization Function Set)을 추가한다. 화면 초기화 콜백(<code>XcmsScreenInitProc</code>)과 해제 콜백(<code>XcmsScreenFreeProc</code>), 화면별 정보 구조체(<code>XcmsPerScrnInfo</code>)를 쓴다.</li>
+</ul>
+</section><div class="pager"><a href="ch5.html">← 5장. 픽스맵과 커서 함수 (Pixmap and Cursor Functions)</a><a href="./">차례</a><a href="ch7.html">7장. 그래픽 컨텍스트 함수 (Graphics Context Functions) →</a></div>
+<a class="top" href="#">↑ 위로</a>
+</html>

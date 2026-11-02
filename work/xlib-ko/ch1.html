@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>1장. Xlib 소개 (Introduction to Xlib) — Xlib 한국어</title>
+<style>
+body{font:16px/1.75 system-ui,"Malgun Gothic",sans-serif;max-width:860px;margin:40px auto;padding:0 16px;background:#111;color:#e8e8e8}
+a{color:#7cf} h1{line-height:1.3} h2{margin-top:3em;border-bottom:1px solid #444;padding-bottom:.3em} h2 small{color:#999;font-weight:normal;font-size:.6em}
+h3{margin-top:2em;color:#fd8} h4{color:#9df}
+code{font-family:ui-monospace,Consolas,monospace;font-size:.92em;background:#222;padding:1px 4px;border-radius:3px}
+pre{background:#1b1d22;border:1px solid #333;padding:12px;overflow-x:auto;border-radius:6px;line-height:1.45} pre code{background:none;padding:0}
+.tip{background:#1d2a1d;border-left:4px solid #6c6;padding:8px 12px;margin:1em 0;border-radius:4px}
+table{border-collapse:collapse;margin:1em 0;font-size:.92em;display:block;overflow-x:auto} td,th{border:1px solid #444;padding:4px 8px;vertical-align:top} th{background:#222}
+nav ol{columns:2} .top{position:fixed;right:16px;bottom:16px;background:#333;padding:6px 10px;border-radius:6px;text-decoration:none}
+.pager{display:flex;justify-content:space-between;gap:12px;margin:2em 0;padding-top:1em;border-top:1px solid #444} .pager a{text-decoration:none}
+</style>
+<p><a href="../../">← 조이봉방</a> · <a href="./">Xlib 번역 차례</a></p><div class="pager"><span></span><a href="./">차례</a><a href="ch2.html">2장. 디스플레이 함수 (Display Functions) →</a></div><section id="ch1"><h2 style="margin-top:1em">1장. Xlib 소개 <small>(Introduction to Xlib)</small></h2>
+
+<p>X 윈도 시스템(X Window System)은 MIT에서 설계한 <strong>네트워크 투명(network-transparent)</strong> 윈도 시스템이다. "네트워크 투명"이란 화면을 그리는 프로그램과 화면을 가진 컴퓨터가 같은 기계에 있든 네트워크 건너편에 있든 프로그램 코드가 똑같다는 뜻이다.</p>
+
+<p>X에서 역할은 둘로 나뉜다.</p>
+<ul>
+<li><strong>X 서버(X server)</strong>: 모니터·키보드·마우스를 실제로 가진 쪽에서 돈다. 화면에 그리고, 사용자 입력을 받아 프로그램들에게 나눠 준다.</li>
+<li><strong>클라이언트(client)</strong>: 우리가 짜는 응용 프로그램이다. 서버에게 "창을 만들어 줘", "여기에 선을 그어 줘" 같은 요청을 보내고, 서버로부터 "키가 눌렸다", "창이 다시 보인다" 같은 이벤트를 받는다.</li>
+</ul>
+<p>일반 데스크톱에서는 서버가 "내 쪽", 원격 프로그램이 "클라이언트"라서 웹의 서버/클라이언트와 방향이 반대로 느껴질 수 있다. 화면을 제공하는 쪽이 서버라고 기억하면 된다.</p>
+
+<p><strong>Xlib</strong>은 클라이언트가 스트림 연결(보통 유닉스 도메인 소켓이나 TCP)을 통해 X 서버와 대화할 수 있게 해 주는 C 함수 라이브러리다. 이 매뉴얼은 X 프로토콜에 대한 저수준 C 인터페이스의 <em>참조서</em>이며, 튜토리얼이 아니다. 툴킷(Xt, Motif, GTK 등)은 모두 Xlib(또는 같은 프로토콜) 위에 쌓은 상위 추상이다. 동작에 대한 최종 기준은 Xlib 매뉴얼이 아니라 <em>X Window System Protocol</em> 문서이다.</p>
+
+<p>이 장은 다음을 다룬다: X 개요, 오류, 표준 헤더 파일, 공통 값과 타입, 이름·인자 규칙, 프로그래밍 시 주의점, 문자 집합과 인코딩, 표기 규칙. 마지막에 짧은 "첫 프로그램" 예제를 덧붙인다.</p>
+
+<h3>1.1 X 윈도 시스템 개요</h3>
+
+<h4>스크린과 디스플레이</h4>
+<p><strong>스크린(screen)</strong>은 실제 모니터 하나와 그 하드웨어이며, 컬러·그레이스케일·흑백일 수 있다. X 서버 하나는 여러 스크린을 동시에 관리할 수 있다. 사용자 한 명이 쓰는 키보드 하나, 포인터(보통 마우스) 하나와 거기 딸린 스크린들의 묶음을 <strong>디스플레이(display)</strong>라고 부른다. 그래서 Xlib에서 "디스플레이를 연다"는 말은 "X 서버와 연결한다"는 뜻이 된다.</p>
+
+<h4>창의 계층 구조</h4>
+<p>X 서버 안의 모든 창은 엄격한 트리(계층)를 이룬다.</p>
+<ul>
+<li>각 스크린마다 맨 위에 화면 전체를 덮는 <strong>루트 창(root window)</strong>이 있다.</li>
+<li>루트 창을 빼면 모든 창에는 부모가 있다. 응용 프로그램은 보통 루트의 자식으로 최소한 창 하나(최상위 창, top-level window)를 만든다.</li>
+<li>자식 창은 또 자식을 가질 수 있으므로 원하는 만큼 깊은 트리를 만들 수 있다. 버튼, 스크롤바 같은 것을 각각 하위 창으로 만드는 것이 전통적인 X 방식이다.</li>
+</ul>
+<p>자식 창은 부모보다 크게 만들 수도 있지만, <strong>창에 대한 모든 출력은 부모의 경계에서 잘린다(clip)</strong>. 형제 창끼리 겹치면 그 중 하나가 "위에" 있어서 아래 것을 가린다. 가려진 영역에 그린 내용은 그 창에 backing store(뒤에서 설명)가 없으면 그냥 버려진다.</p>
+<p>창에는 0픽셀 이상의 <strong>테두리(border)</strong>가 있고, 테두리는 단색이나 패턴(pixmap)으로 칠할 수 있다. 대부분의 창에는 <strong>배경(background)</strong>이 있어서 가려졌다가 다시 드러나면 서버가 배경으로 다시 칠해 준다. 자식 창은 부모를 가리며, 부모에 그리는 그래픽은 보통 자식 창 영역에서 잘린다.</p>
+
+<h4>좌표계</h4>
+<p>창과 pixmap은 각자 자기 좌표계를 가진다. X축은 가로, Y축은 세로이며, 원점 [0, 0]은 <strong>왼쪽 위</strong>다(Y는 아래로 갈수록 커진다). 좌표는 픽셀 단위 정수이고 픽셀의 중심과 일치한다. 창의 원점은 테두리 <em>안쪽</em>의 왼쪽 위 모서리다. 즉 테두리 두께를 바꿔도 창 안에서 그리는 좌표는 영향을 받지 않는다.</p>
+
+<h4>창 내용은 보존되지 않는다 &mdash; Expose</h4>
+<p>X를 처음 쓰는 사람이 가장 많이 놀라는 부분이다. X는 창의 내용을 보존해 주겠다고 <strong>보장하지 않는다</strong>. 창이 다른 창에 가려졌다 다시 드러나면 그 부분의 그림은 사라졌을 수 있다. 그러면 서버는 클라이언트에게 <code>Expose</code> 이벤트를 보내 "이 부분을 다시 그려라"라고 알린다. 따라서 프로그램은 <strong>언제든 요청이 오면 창 내용을 처음부터 다시 그릴 수 있게</strong> 짜야 한다. 그리기 코드를 <code>Expose</code> 처리 부분에 두는 것이 기본 패턴이다.</p>
+<p>왜 이렇게 설계했을까? 1980년대 하드웨어는 화면 밖 메모리가 귀했고, 모든 창의 사본을 서버가 들고 있는 것은 비쌌다. 클라이언트가 다시 그리게 하면 서버 메모리를 크게 아낄 수 있다.</p>
+
+<h4>Pixmap과 Drawable</h4>
+<p><strong>pixmap</strong>은 화면 밖(off-screen)에 있는 그림 저장 공간이다. 깊이(depth)가 1인 pixmap을 특별히 <strong>bitmap</strong>이라 부른다. pixmap은 대부분의 그리기 함수에서 창과 똑같이 쓸 수 있고, 패턴이나 타일을 정의하는 데에도 쓰인다. 창과 pixmap을 합쳐 <strong>drawable</strong>이라 한다. 그리기 함수의 인자 타입이 <code>Drawable</code>이면 둘 중 아무것이나 넘길 수 있다는 뜻이다.</p>
+
+<h4>요청은 버퍼에 쌓였다가 비동기로 실행된다</h4>
+<p>Xlib 함수 대부분은 요청을 바로 서버로 보내지 않고 <strong>출력 버퍼에 추가만</strong> 한다. 요청은 나중에 서버에서 비동기로 실행된다. 네트워크 왕복을 줄이려는 설계다. 반면 서버에 저장된 정보를 돌려받아야 하는 함수(예: 창의 속성 조회)는 답(reply)이 오거나 오류가 날 때까지 <strong>블록(block)</strong>한다.</p>
+<p>요청이 실제로 처리될 때까지 기다리고 싶으면 그 뒤에 <code>XSync</code>를 부른다. <code>XSync</code>는 버퍼에 쌓인 요청이 모두 보내지고 처리될 때까지 블록한다. 또 중요한 부수 효과로, <strong>서버에서 값을 돌려받는 함수나 입력을 기다리는 함수를 부르면 출력 버퍼가 항상 비워진다(flush)</strong>. 그래서 이벤트 루프에서 <code>XNextEvent</code>를 부르면 그 전에 쌓인 그리기 요청이 자동으로 나간다.</p>
+
+<h4>리소스 ID</h4>
+<p>많은 Xlib 함수는 정수 <strong>리소스 ID</strong>를 돌려준다. 이것은 서버 안에 있는 객체를 가리키는 번호표다. 타입으로는 <code>Window</code>, <code>Font</code>, <code>Pixmap</code>, <code>Colormap</code>, <code>Cursor</code>, <code>GContext</code>가 있고 <code>&lt;X11/X.h&gt;</code>에 정의돼 있다. 포인터가 아니라 번호이므로 클라이언트 메모리에는 실체가 없다.</p>
+<ul>
+<li>리소스는 요청으로 만들어지고, 요청으로 없애거나 연결이 닫힐 때 없어진다.</li>
+<li>대부분 다른 프로그램과 공유할 수 있다. 실제로 창 관리자(window manager)는 다른 프로그램의 창을 직접 옮기고 크기를 바꾼다.</li>
+<li>글꼴과 커서는 여러 스크린에서 자동으로 공유된다. 글꼴은 필요할 때 올리고 내리며 여러 클라이언트가 공유하고, 서버에 캐시되는 일이 많다.</li>
+<li>그래픽 컨텍스트(GC)를 응용 프로그램끼리 공유하는 기능은 Xlib에 없다.</li>
+</ul>
+
+<h4>이벤트</h4>
+<p>클라이언트는 <strong>이벤트</strong>로 상황을 전달받는다. 이벤트는 요청의 부수 효과로 생기기도 하고(예: 창 쌓기 순서를 바꾸면 <code>Expose</code>가 생긴다), 키보드 입력처럼 완전히 비동기적으로 생기기도 한다. 클라이언트는 원하는 이벤트를 골라 "알려 달라"고 요청한다. 다만 다른 프로그램이 우리에게 이벤트를 보낼 수도 있으므로, <strong>모든 종류의 이벤트를 처리하거나 무시할 준비</strong>가 돼 있어야 한다. 이벤트 루프의 <code>switch</code>에 <code>default:</code>를 두는 이유다.</p>
+<p>입력 이벤트(키 누름, 포인터 이동 등)는 서버로부터 비동기로 도착해 큐에 쌓이고, <code>XNextEvent</code>나 <code>XWindowEvent</code> 같은 함수를 명시적으로 부를 때 꺼내진다. <code>XRaiseWindow</code> 같은 일부 함수는 <code>Expose</code>, <code>ConfigureRequest</code> 이벤트를 만든다. 이것들도 비동기로 오지만, 꼭 기다려야 한다면 그 함수 뒤에 <code>XSync</code>를 부를 수 있다.</p>
+
+<h3>1.2 오류</h3>
+<p>일부 함수는 <code>Status</code>라는 정수 오류 표시를 돌려준다. <strong>실패하면 0</strong>을 돌려주고, 이때 반환용 인자에는 아무것도 써 넣지 않는다. 그러니 0이 왔을 때 결과 변수를 읽으면 쓰레기 값을 읽게 된다.</p>
+<p>C에는 다중 반환값이 없으므로 많은 함수가 호출자가 넘긴 메모리(포인터 인자)에 결과를 써서 돌려준다. 문자열 포인터를 돌려주는 함수는 해당 문자열이 없으면 <code>NULL</code>을 돌려준다.</p>
+<p>X 서버는 프로토콜 오류를 <em>발견한 시점</em>에 보고한다. 한 요청에서 여러 오류가 가능하면 서버는 그중 아무것이나 보고할 수 있다. 그런데 Xlib은 요청을 버퍼에 모아 두었다가 보내므로, <strong>오류가 실제 원인이 된 호출보다 훨씬 나중에 보고될 수 있다</strong>. 디버깅할 때는 동기 모드를 켜서(11.8.1절, <code>XSynchronize</code>) 오류가 생기는 즉시 보고되게 할 수 있다.</p>
+<p>Xlib이 오류를 감지하면 오류 처리기(error handler)를 부른다. 직접 처리기를 등록하지 않으면 <strong>오류 내용을 출력하고 프로그램을 종료</strong>한다.</p>
+<div class="tip">"BadWindow 오류로 프로그램이 죽었는데, 오류가 난 줄이 엉뚱한 곳이다"라는 경험은 대부분 버퍼링 때문이다. 원인을 찾을 때는 동기 모드를 켜거나 의심되는 호출 뒤에 <code>XSync(dpy, False)</code>를 넣어 본다. 단, 동기 모드는 매우 느리니 디버깅에만 쓴다.</div>
+
+<h3>1.3 표준 헤더 파일</h3>
+<p>Xlib 표준에 속하는 헤더는 다음과 같다.</p>
+<table>
+<tr><th>헤더</th><th>내용</th></tr>
+<tr><td><code>&lt;X11/Xlib.h&gt;</code></td><td>Xlib의 주 헤더. 대부분의 심볼이 여기서 선언된다. 전처리기 심볼 <code>XlibSpecificationRelease</code>(이 판에서는 6, Release 5부터 존재)도 들어 있다.</td></tr>
+<tr><td><code>&lt;X11/X.h&gt;</code></td><td>X 프로토콜의 타입과 상수. <code>Xlib.h</code>가 자동으로 포함하므로 직접 include할 필요가 없다.</td></tr>
+<tr><td><code>&lt;X11/Xcms.h&gt;</code></td><td>6장의 색 관리 기능. <code>Xcms</code> 접두사 심볼과 Color Conversion Context 매크로. <code>Xlib.h</code> 다음에 포함해야 한다.</td></tr>
+<tr><td><code>&lt;X11/Xutil.h&gt;</code></td><td>클라이언트 간 통신(14장)과 유틸리티 함수(16장). <code>Xlib.h</code> 다음에 포함해야 한다.</td></tr>
+<tr><td><code>&lt;X11/Xresource.h&gt;</code></td><td>리소스 관리자(15장). <code>Xlib.h</code> 다음에 포함해야 한다.</td></tr>
+<tr><td><code>&lt;X11/Xatom.h&gt;</code></td><td>미리 정의된 아톰(<code>XA_</code> 접두사).</td></tr>
+<tr><td><code>&lt;X11/cursorfont.h&gt;</code></td><td>표준 커서 글꼴의 커서 심볼(<code>XC_</code> 접두사, 부록 B).</td></tr>
+<tr><td><code>&lt;X11/keysymdef.h&gt;</code></td><td>표준 KeySym 값(<code>XK_</code> 접두사). 그룹별로 나뉘어 있고, 포함하기 전에 <code>XK_MISCELLANY</code>, <code>XK_LATIN1</code>, <code>XK_KOREAN</code> 같은 전처리기 심볼을 정의해야 해당 그룹이 들어온다.</td></tr>
+<tr><td><code>&lt;X11/keysym.h&gt;</code></td><td><code>XK_MISCELLANY</code>, <code>XK_XKB_KEYS</code>, <code>XK_LATIN1</code>~<code>XK_LATIN4</code>, <code>XK_GREEK</code>을 정의한 뒤 <code>keysymdef.h</code>를 포함한다. 보통은 이것을 쓴다.</td></tr>
+<tr><td><code>&lt;X11/Xlibint.h&gt;</code></td><td>확장(extension) 작성용 함수·타입(부록 C). <code>Xlib.h</code>를 자동 포함.</td></tr>
+<tr><td><code>&lt;X11/Xproto.h&gt;</code>, <code>&lt;X11/Xprotostr.h&gt;</code></td><td>기본 X 프로토콜의 타입과 심볼(확장 구현용). 각각 자동 포함되므로 직접 쓸 일이 없다.</td></tr>
+<tr><td><code>&lt;X11/X10.h&gt;</code></td><td>X10 호환 함수(부록 D).</td></tr>
+</table>
+<div class="tip"><code>keysymdef.h</code>를 직접 포함하면서 그룹 심볼을 정의하지 않으면 <code>XK_Escape</code> 같은 이름이 "정의되지 않음" 오류를 낸다. 일반 응용은 <code>&lt;X11/keysym.h&gt;</code>를 포함하면 된다. 한국어 KeySym이 필요하면 <code>#define XK_KOREAN</code> 후 <code>keysymdef.h</code>를 포함한다.</div>
+
+<h3>1.4 공통 값과 타입</h3>
+<ul>
+<li><code>Bool</code> 타입과 그 값 <code>True</code>, <code>False</code>.</li>
+<li><code>None</code>: 보편적인 "없음" 리소스 ID 또는 아톰. 값은 0이다. 예를 들어 커서를 <code>None</code>으로 주면 "커서를 따로 지정하지 않음"이다.</li>
+<li><code>XID</code>: 리소스 ID 일반을 나타내는 타입. <code>Window</code>, <code>Pixmap</code> 등은 모두 사실상 <code>XID</code>다.</li>
+<li><code>XPointer</code>: <code>char *</code>로 정의된 범용 불투명 포인터.</li>
+</ul>
+
+<h3>1.5 이름과 인자 순서 규칙</h3>
+<p>Xlib은 함수가 어떤 정보를 필요로 하는지만 기억하면 인자 순서를 짐작할 수 있도록 규칙을 정해 두었다. 이 규칙을 알면 매뉴얼을 덜 뒤지게 된다.</p>
+<h4>이름 규칙</h4>
+<ul>
+<li>외부 심볼은 대소문자를 섞어 쓴다(MixedCase). 변수는 소문자, 사용자 매크로는 전부 대문자라는 기존 C 관례를 남겨 두기 위해서다.</li>
+<li>모든 Xlib <strong>함수</strong>는 대문자 <code>X</code>로 시작한다(<code>XOpenDisplay</code>).</li>
+<li>함수 이름과 심볼의 각 단어 첫 글자는 대문자다.</li>
+<li>사용자가 볼 수 있는 자료 구조는 모두 <code>X</code>로 시작한다(<code>XEvent</code>, <code>XSetWindowAttributes</code>). 더 일반적으로, 사용자가 역참조할 수 있는 것은 <code>X</code>로 시작한다.</li>
+<li>매크로와 그 밖의 심볼은 <code>X</code>로 시작하지 <strong>않는다</strong>. 대신 각 단어 첫 글자를 대문자로 쓴다(<code>DefaultScreen</code>, <code>BlackPixel</code>).</li>
+<li>구조체 멤버와 변수는 소문자이며, 합성어는 밑줄로 잇는다(<code>border_width</code>).</li>
+</ul>
+<h4>인자 순서 규칙</h4>
+<ul>
+<li><code>display</code> 인자는 있으면 항상 <strong>맨 앞</strong>이다.</li>
+<li>리소스 객체는 <code>display</code> 바로 다음에 온다.</li>
+<li>GC와 다른 리소스(대개 drawable)가 함께 있으면 GC가 그 뒤에 온다. drawable이 다른 모든 리소스보다 앞선다. 예: <code>XDrawLine(display, d, gc, ...)</code>.</li>
+<li>원본(source) 인자가 대상(destination) 인자보다 앞선다.</li>
+<li><code>x</code>는 <code>y</code>보다, <code>width</code>는 <code>height</code>보다 앞선다. 네 개를 함께 쓰면 <code>x, y, width, height</code> 순서다.</li>
+<li>마스크와 구조체가 함께 있으면 마스크가 구조체 포인터보다 앞선다. 예: <code>XChangeWindowAttributes(display, w, valuemask, attributes)</code>.</li>
+</ul>
+
+<h3>1.6 프로그래밍 시 주의점</h3>
+<ul>
+<li><strong>좌표와 크기는 실제로 16비트 값이다.</strong> 같은 성능에서 필요한 대역폭을 줄이려는 결정이었다. 인터페이스에서는 보통 <code>int</code>로 선언돼 있지만 16비트를 넘는 값은 <strong>경고 없이 잘린다</strong>. 크기(width, height)는 부호 없는 값으로 선언된다. 아주 큰 캔버스나 좌표 계산 결과가 32767을 넘으면 엉뚱한 곳에 그려지니 주의한다.</li>
+<li><strong>키보드는 제조사마다 가장 많이 다른 부분이다.</strong> 이식성을 원하면 특정 키 배치를 가정하지 말고 보수적으로 짠다.</li>
+<li><strong>화면 밖 메모리는 많지 않을 수 있다.</strong> 가능하면 pixmap과 backing store 사용을 줄인다.</li>
+<li><strong>화면 공간의 주인은 사용자다.</strong> 화면 전체를 쥐고 있다고 가정하지 말고 창 관리자의 결정에 반응하도록 짠다. 최상위 창 <em>안쪽</em>에서 무엇을 하는지는 응용의 자유다(14장, ICCCM 참고).</li>
+</ul>
+
+<h3>1.7 문자 집합과 인코딩</h3>
+<p>일부 Xlib 함수는 특정 문자 집합이나 인코딩을 언급한다. 자주 나오는 용어를 정리한다.</p>
+<table>
+<tr><th>용어</th><th>뜻</th></tr>
+<tr><td>X Portable Character Set</td><td>Xlib이 지원하는 모든 로케일에 존재한다고 가정하는 97개 기본 문자: <code>a..z A..Z 0..9</code>, 문장부호 <code>!"#$%&amp;'()*+,-./:;&lt;=&gt;?@[\]^_`{|}~</code>, 공백, 탭, 줄바꿈. 7비트 ASCII의 그래픽 문자에 이 세 제어 문자를 더한 것과 같다. 호스트에서의 실제 인코딩은 시스템마다 다르다.</td></tr>
+<tr><td>Host Portable Character Encoding</td><td>위 문자 집합을 호스트에서 인코딩한 방식. 인코딩 자체는 정의하지 않지만, 호스트의 모든 로케일에서 같아야 한다. 이 인코딩의 문자열은 위 97자만 담는다.</td></tr>
+<tr><td>Latin-1</td><td>ISO8859-1 표준의 부호화 문자 집합.</td></tr>
+<tr><td>Latin Portable Character Encoding</td><td>X Portable Character Set을 Latin-1 코드값과 ASCII 제어 문자로 인코딩한 것. Latin-1 전체가 아니라 97자만 담는다.</td></tr>
+<tr><td>STRING Encoding</td><td>Latin-1에 탭과 줄바꿈을 더한 것.</td></tr>
+<tr><td>POSIX Portable Filename Character Set</td><td>POSIX 호스트에서 모든 로케일에서 파일 이름에 안전하게 쓸 수 있는 65자: <code>a..z A..Z 0..9 ._-</code>.</td></tr>
+</table>
+<p>실무에서는 "Host Portable"이라고 쓰인 곳에 ASCII 문자만 넣으면 안전하다고 이해하면 된다. 한글 같은 문자는 13장의 로케일·입력 메서드 기능을 거쳐 다룬다.</p>
+
+<h3>1.8 표기 규칙</h3>
+<p>원문 매뉴얼이 함수 설명을 쓰는 방식이다. 원문을 직접 읽을 때 도움이 된다.</p>
+<ul>
+<li>전역 심볼(함수 이름, 헤더에 정의된 심볼, 구조체 이름)은 특별한 글꼴로, 선언 속 함수 인자는 기울임꼴로 쓴다.</li>
+<li>각 함수는 다른 함수와의 차이를 설명하는 글 &rarr; 함수 선언 &rarr; 인자별 설명 &rarr; 추가 설명 순으로 나온다. 해당되면 마지막 문단에 그 함수가 낼 수 있는 Xlib 오류 코드가 나온다(오류 코드 전체는 11.8.2절).</li>
+<li>매뉴얼은 ANSI C 프로토타입 문법을 쓰지 않지만, ANSI C 환경에서는 헤더가 보통 프로토타입으로 선언한다.</li>
+<li>인자 설명이 <em>specifies</em>(여럿이면 <em>specify</em>)로 시작하면 <strong>호출자가 넘기는 값</strong>, <em>returns</em>(<em>return</em>)로 시작하면 <strong>함수가 돌려주는 값</strong>, <em>specifies and returns</em>면 둘 다다.</li>
+<li>값을 돌려받는 구조체 포인터는 이름 끝에 <code>_return</code>이 붙는다(예: <code>count_return</code>). 그 밖의 포인터 인자는 읽기 전용이다. 입출력 겸용 포인터는 <code>_in_out</code>이 붙는다.</li>
+</ul>
+
+<h3>첫 프로그램</h3>
+<p>지금까지 나온 개념을 모아 가장 작은 X 프로그램을 짜 본다. 디스플레이를 열고, 창을 만들고, 관심 있는 이벤트를 고른 뒤 창을 띄우고(map), 이벤트 루프에서 <code>Expose</code>가 오면 글자를 그리고 키가 눌리면 끝낸다. 각 함수는 2장(디스플레이), 3장(창), 10장(이벤트), 8장(그리기)에서 자세히 다룬다.</p>
+<pre><code>/* hello.c  --  cc hello.c -o hello -lX11 */
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;string.h&gt;
+#include &lt;X11/Xlib.h&gt;
+
+int main(void)
+{
+    Display *dpy;
+    int screen;
+    Window win;
+    XEvent ev;
+    const char *msg = "Hello, X!  (press any key)";
+
+    /* 1. 서버에 연결한다. NULL이면 DISPLAY 환경 변수를 쓴다. */
+    dpy = XOpenDisplay(NULL);
+    if (dpy == NULL) {
+        fprintf(stderr, "cannot open display\n");
+        return 1;
+    }
+    screen = DefaultScreen(dpy);
+
+    /* 2. 루트 창의 자식으로 창을 만든다(아직 화면에 안 보인다). */
+    win = XCreateSimpleWindow(dpy, RootWindow(dpy, screen),
+                              10, 10, 320, 120,      /* x, y, width, height */
+                              1,                     /* border_width */
+                              BlackPixel(dpy, screen),   /* border */
+                              WhitePixel(dpy, screen));  /* background */
+
+    /* 3. 받고 싶은 이벤트를 먼저 고른다. map보다 먼저 해야
+          첫 Expose를 놓치지 않는다. */
+    XSelectInput(dpy, win, ExposureMask | KeyPressMask);
+
+    /* 4. 창을 화면에 띄운다. */
+    XMapWindow(dpy, win);
+
+    /* 5. 이벤트 루프. XNextEvent는 출력 버퍼를 비우고 이벤트를 기다린다. */
+    for (;;) {
+        XNextEvent(dpy, &amp;ev);
+        switch (ev.type) {
+        case Expose:
+            /* 여러 Expose가 연달아 오면 마지막 것(count == 0)에서만 그린다. */
+            if (ev.xexpose.count == 0)
+                XDrawString(dpy, win, DefaultGC(dpy, screen),
+                            20, 60, msg, (int)strlen(msg));
+            break;
+        case KeyPress:
+            goto done;
+        default:
+            break;   /* 다른 이벤트는 무시한다. */
+        }
+    }
+done:
+    /* 6. 연결을 닫는다. 만든 창 등 리소스는 서버가 정리한다. */
+    XCloseDisplay(dpy);
+    return 0;
+}</code></pre>
+<div class="tip">
+<ul>
+<li>그리기를 <code>XMapWindow</code> 직후에 바로 하면 안 보이는 경우가 많다. 창이 실제로 화면에 나타나기 전(창 관리자가 아직 처리 중일 때)에 그린 내용은 버려지기 때문이다. 그래서 그리기는 <code>Expose</code>를 받았을 때 한다.</li>
+<li><code>XSelectInput</code>을 빼먹으면 이벤트가 하나도 오지 않아 프로그램이 <code>XNextEvent</code>에서 영원히 멈춘다.</li>
+<li>창 관리자의 닫기 버튼(X)을 누르면 이 프로그램은 오류 메시지와 함께 끝날 수 있다. 정상적으로 처리하려면 <code>WM_DELETE_WINDOW</code> 프로토콜을 써야 하며 14장에서 다룬다.</li>
+</ul>
+</div>
+</section><div class="pager"><span></span><a href="./">차례</a><a href="ch2.html">2장. 디스플레이 함수 (Display Functions) →</a></div>
+<a class="top" href="#">↑ 위로</a>
+</html>

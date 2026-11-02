@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>5장. 픽스맵과 커서 함수 (Pixmap and Cursor Functions) — Xlib 한국어</title>
+<style>
+body{font:16px/1.75 system-ui,"Malgun Gothic",sans-serif;max-width:860px;margin:40px auto;padding:0 16px;background:#111;color:#e8e8e8}
+a{color:#7cf} h1{line-height:1.3} h2{margin-top:3em;border-bottom:1px solid #444;padding-bottom:.3em} h2 small{color:#999;font-weight:normal;font-size:.6em}
+h3{margin-top:2em;color:#fd8} h4{color:#9df}
+code{font-family:ui-monospace,Consolas,monospace;font-size:.92em;background:#222;padding:1px 4px;border-radius:3px}
+pre{background:#1b1d22;border:1px solid #333;padding:12px;overflow-x:auto;border-radius:6px;line-height:1.45} pre code{background:none;padding:0}
+.tip{background:#1d2a1d;border-left:4px solid #6c6;padding:8px 12px;margin:1em 0;border-radius:4px}
+table{border-collapse:collapse;margin:1em 0;font-size:.92em;display:block;overflow-x:auto} td,th{border:1px solid #444;padding:4px 8px;vertical-align:top} th{background:#222}
+nav ol{columns:2} .top{position:fixed;right:16px;bottom:16px;background:#333;padding:6px 10px;border-radius:6px;text-decoration:none}
+.pager{display:flex;justify-content:space-between;gap:12px;margin:2em 0;padding-top:1em;border-top:1px solid #444} .pager a{text-decoration:none}
+</style>
+<p><a href="../../">← 조이봉방</a> · <a href="./">Xlib 번역 차례</a></p><div class="pager"><a href="ch4.html">← 4장. 윈도 정보 함수 (Window Information Functions)</a><a href="./">차례</a><a href="ch6.html">6장. 색 관리 함수 (Color Management Functions) →</a></div><section id="ch5"><h2 style="margin-top:1em">5장. 픽스맵과 커서 함수 <small>(Pixmap and Cursor Functions)</small></h2>
+
+<p>이 장은 화면 밖 그림판인 <b>픽스맵</b>과, 마우스 포인터 모양인 <b>커서</b>를 만들고 없애는 함수를 다룬다. 둘 다 서버 쪽 자원(resource)이므로, 클라이언트는 ID만 들고 있고 실제 메모리는 서버에 있다. 다 쓰면 반드시 풀어 줘야 서버 메모리가 새지 않는다.</p>
+
+<h3>5.1 픽스맵 만들기와 없애기 (Creating and Freeing Pixmaps)</h3>
+<p>픽스맵은 화면에 보이지 않는(off-screen) 그림 영역이다. 커서를 정의하거나, 타일 무늬로 쓰거나, 래스터 연산의 원본으로 쓰는 등 여러 곳에 쓰인다. 대부분의 그리기 요청은 윈도와 픽스맵 둘 다에 쓸 수 있다(둘을 합쳐 드로어블이라 한다). <b>비트맵</b>은 깊이가 1인(비트 플레인이 하나인) 픽스맵이다.</p>
+<p>픽스맵은 <b>만든 화면에서만</b> 쓸 수 있다. 화면마다 메모리 구조와 픽셀 형식이 다를 수 있기 때문이다.</p>
+
+<h4>XCreatePixmap</h4>
+<pre><code>Pixmap XCreatePixmap(Display *display, Drawable d, unsigned int width,
+                     unsigned int height, unsigned int depth);</code></pre>
+<p>지정한 크기·깊이의 픽스맵을 만들고 ID를 돌려준다.</p>
+<ul>
+<li><code>d</code>: 어느 화면에 만들지를 알려 주는 드로어블. 서버는 이 드로어블로 화면만 정한다. <code>InputOnly</code> 윈도를 넘겨도 된다.</li>
+<li><code>width</code>, <code>height</code>: 0이 아니어야 한다. 0이면 <code>BadValue</code>.</li>
+<li><code>depth</code>: 그 화면이 지원하는 깊이 중 하나여야 한다. 아니면 <code>BadValue</code>.</li>
+</ul>
+<p>만든 픽스맵은 그 화면에서, <b>같은 깊이의 다른 드로어블과만</b> 함께 쓸 수 있다(예외는 <code>XCopyPlane</code>). 그리고 <b>처음 내용은 정해져 있지 않다</b>. 쓰레기 값이 들어 있을 수 있다는 뜻이다. 오류: <code>BadAlloc</code>, <code>BadDrawable</code>, <code>BadValue</code>.</p>
+
+<h4>XFreePixmap</h4>
+<pre><code>XFreePixmap(Display *display, Pixmap pixmap);</code></pre>
+<p>먼저 픽스맵 ID와 픽스맵 사이의 연결을 끊는다. 그다음 서버는 그 픽스맵을 참조하는 곳이 더 없을 때 메모리를 푼다. 예를 들어 GC의 타일로 쓰이고 있다면 그 동안은 실제 메모리가 남아 있을 수 있다. 어쨌든 푼 ID는 다시 쓰면 안 된다. 오류: <code>BadPixmap</code>.</p>
+
+<h4>예제: 더블 버퍼링</h4>
+<p>픽스맵의 가장 흔한 용도는 "화면 밖에서 다 그린 뒤 한 번에 옮기기"다. 윈도에 직접 여러 번 그리면 중간 과정이 보여 깜빡이지만, 픽스맵에 다 그리고 <code>XCopyArea</code>로 한 번에 옮기면 깜빡임이 없다.</p>
+<pre><code>#include &lt;X11/Xlib.h&gt;
+
+int main(void)
+{
+    Display *dpy = XOpenDisplay(NULL);
+    if (!dpy) return 1;
+    int scr = DefaultScreen(dpy);
+    Window win = XCreateSimpleWindow(dpy, RootWindow(dpy, scr), 0, 0, 200, 200, 1,
+                                     BlackPixel(dpy, scr), WhitePixel(dpy, scr));
+    XSelectInput(dpy, win, ExposureMask | KeyPressMask);
+    XMapWindow(dpy, win);
+
+    /* 윈도와 같은 깊이로 만든다. 깊이가 다르면 XCopyArea가 BadMatch. */
+    Pixmap buf = XCreatePixmap(dpy, win, 200, 200, DefaultDepth(dpy, scr));
+    GC gc = XCreateGC(dpy, buf, 0, NULL);
+
+    /* 초기 내용은 쓰레기이므로 먼저 배경으로 칠한다 */
+    XSetForeground(dpy, gc, WhitePixel(dpy, scr));
+    XFillRectangle(dpy, buf, gc, 0, 0, 200, 200);
+    XSetForeground(dpy, gc, BlackPixel(dpy, scr));
+    XFillArc(dpy, buf, gc, 50, 50, 100, 100, 0, 360 * 64);
+
+    for (;;) {
+        XEvent ev;
+        XNextEvent(dpy, &amp;ev);
+        if (ev.type == Expose)
+            XCopyArea(dpy, buf, win, gc, 0, 0, 200, 200, 0, 0);
+        else if (ev.type == KeyPress)
+            break;
+    }
+    XFreeGC(dpy, gc);
+    XFreePixmap(dpy, buf);
+    XCloseDisplay(dpy);
+    return 0;
+}</code></pre>
+<div class="tip">새 픽스맵은 깨끗하지 않다. 꼭 <code>XFillRectangle</code> 등으로 먼저 칠한다. 또 깊이 1짜리 비트맵에 그릴 GC는 그 비트맵으로 만들어야 한다. 윈도로 만든 GC(깊이 24 등)를 비트맵에 쓰면 <code>BadMatch</code>다(7장 참고). 창 크기가 바뀌면 픽스맵 크기는 자동으로 바뀌지 않으므로, 새로 만들고 옛것은 <code>XFreePixmap</code>한다.</div>
+
+<h3>5.2 커서 만들기, 색 바꾸기, 없애기 (Creating, Recoloring, and Freeing Cursors)</h3>
+<p>윈도마다 다른 커서를 정할 수 있다. 포인터가 보이는 윈도 안에 있으면 그 윈도의 커서가 쓰이고, 그 윈도에 커서가 정해져 있지 않으면 부모 윈도의 커서가 쓰인다. 그래서 최상위 윈도에 한 번만 정하면 그 안의 자식 윈도들도 같은 커서를 쓴다(커서를 윈도에 붙이는 <code>XDefineCursor</code>는 3장에 있다).</p>
+<p>X에서 커서는 네 가지로 이루어진다.</p>
+<ul>
+<li><b>소스(source)</b>: 깊이 1 픽스맵. 1인 픽셀은 전경색, 0인 픽셀은 배경색으로 칠해진다.</li>
+<li><b>마스크(mask)</b>: 깊이 1 픽스맵. 커서의 실제 모양을 정한다. 1인 곳만 보이고 0인 곳은 투명하다.</li>
+<li><b>색</b>: 전경색과 배경색 두 가지뿐이다.</li>
+<li><b>핫스폿(hotspot)</b>: 포인터 이벤트가 났을 때 좌표로 보고되는 커서 위의 점. 화살표라면 화살 끝이다.</li>
+</ul>
+<p>하드웨어에 따라 커서 크기나 마스크 지원에 제한이 있을 수 있다. 가능한 크기는 <code>XQueryBestCursor</code>로 알 수 있다. 표준 커서 폰트가 있어서 대부분은 그것을 쓰면 되고, 임의의 폰트나 비트맵으로 커서를 만드는 함수도 있다.</p>
+
+<h4>XCreateFontCursor</h4>
+<pre><code>#include &lt;X11/cursorfont.h&gt;
+
+Cursor XCreateFontCursor(Display *display, unsigned int shape);</code></pre>
+<p>표준 커서 폰트에서 커서를 하나 만든다. 가장 많이 쓰는 커서 함수다.</p>
+<ul>
+<li><code>shape</code>: 표준 폰트의 어느 글리프를 쓸지. <code>&lt;X11/cursorfont.h&gt;</code>의 상수(<code>XC_left_ptr</code>, <code>XC_watch</code>, <code>XC_xterm</code>, <code>XC_hand2</code>, <code>XC_crosshair</code> 등)를 쓴다. 전체 목록은 부록 B.</li>
+<li>X는 <code>cursor</code>라는 특별한 폰트에 표준 커서 모양을 담아 둔다. 이 폰트는 디스플레이마다 맞춰 바꿀 수 있으므로 앱은 이 방법을 쓰라고 권장된다.</li>
+<li>핫스폿은 커서 폰트에 저장된 정보에서 온다. 처음 색은 전경 검정, 배경 흰색이다(<code>XRecolorCursor</code>로 바꿀 수 있다).</li>
+<li>오류: <code>BadAlloc</code>, <code>BadValue</code>.</li>
+</ul>
+<pre><code>#include &lt;X11/cursorfont.h&gt;
+
+Cursor busy = XCreateFontCursor(dpy, XC_watch);
+XDefineCursor(dpy, win, busy);   /* 오래 걸리는 작업 동안 모래시계 */
+XFlush(dpy);
+/* ... 작업 ... */
+XUndefineCursor(dpy, win);       /* 부모 커서로 되돌림 */
+XFreeCursor(dpy, busy);</code></pre>
+
+<h4>XCreateGlyphCursor</h4>
+<pre><code>Cursor XCreateGlyphCursor(Display *display, Font source_font, Font mask_font,
+                          unsigned int source_char, unsigned int mask_char,
+                          XColor *foreground_color, XColor *background_color);</code></pre>
+<p>임의의 폰트 글리프로 커서를 만든다. <code>XCreatePixmapCursor</code>와 같은데, 소스와 마스크 비트맵을 픽스맵 대신 폰트 글리프에서 가져온다는 점만 다르다.</p>
+<ul>
+<li><code>source_char</code>는 <code>source_font</code>에 정의된 글리프여야 한다. 아니면 <code>BadValue</code>.</li>
+<li><code>mask_font</code>는 <code>None</code>이어도 된다(마스크는 선택 사항). 주었다면 <code>mask_char</code>도 그 폰트에 정의돼 있어야 한다. 마스크가 없으면 소스의 모든 픽셀이 보인다.</li>
+<li>두 글리프의 원점(origin)을 같은 자리에 겹치고, 그 점이 핫스폿이 된다. 두 글리프의 경계 상자 크기는 달라도 되고, 핫스폿이 경계 상자 안에 있을 필요도 없다.</li>
+<li>2바이트 행렬 폰트라면 16비트 값을 byte1을 상위 바이트, byte2를 하위 바이트로 만든다.</li>
+<li>더 이상 직접 참조하지 않을 폰트는 커서를 만든 뒤 바로 <code>XFreeFont</code>로 풀어도 된다.</li>
+<li>오류: <code>BadAlloc</code>, <code>BadFont</code>, <code>BadValue</code>.</li>
+</ul>
+<p>표준 커서 폰트의 글리프를 직접 고르고 싶을 때(예: 원하는 색으로 바로 만들기) 쓸 수 있다. 커서 폰트에서는 보통 모양 글리프 번호가 <code>shape</code>, 그 마스크가 <code>shape + 1</code>이다.</p>
+
+<h4>XCreatePixmapCursor</h4>
+<pre><code>Cursor XCreatePixmapCursor(Display *display, Pixmap source, Pixmap mask,
+                           XColor *foreground_color, XColor *background_color,
+                           unsigned int x, unsigned int y);</code></pre>
+<p>비트맵 두 장(소스와 마스크)으로 커서를 만들고 커서 ID를 돌려준다.</p>
+<ul>
+<li>전경·배경 RGB 값은 서버 화면이 <code>StaticGray</code>나 <code>GrayScale</code>이어도 반드시 지정해야 한다. 소스에서 1인 픽셀에 전경색, 0인 픽셀에 배경색이 쓰인다.</li>
+<li><code>source</code>와 <code>mask</code>(있다면)는 깊이 1이어야 한다(아니면 <code>BadMatch</code>). 루트는 상관없다.</li>
+<li><code>mask</code>는 <code>None</code>이어도 된다. 그러면 소스의 모든 픽셀이 보인다. 있다면 소스와 크기가 같아야 한다(아니면 <code>BadMatch</code>).</li>
+<li><code>x</code>, <code>y</code>: 소스 원점 기준 핫스폿. 소스 안의 점이어야 한다(아니면 <code>BadMatch</code>).</li>
+<li>디스플레이 제약에 맞추려고 서버가 커서 구성 요소를 마음대로 변형할 수 있다.</li>
+<li>서버가 픽스맵을 복사할 수도, 안 할 수도 있다. 그래서 커서를 만든 뒤 소스나 마스크에 그리면 결과가 정해져 있지 않다. 더 쓸 일이 없으면 픽스맵은 바로 풀어도 된다.</li>
+<li>오류: <code>BadAlloc</code>, <code>BadPixmap</code>.</li>
+</ul>
+<p>가장 흔한 활용은 "보이지 않는 커서"다. 게임이나 전체 화면 앱에서 마우스를 숨길 때 쓴다.</p>
+<pre><code>/* 투명 커서 만들기: 마스크가 모두 0이면 아무것도 안 보인다 */
+static char zero[1] = { 0 };
+Pixmap bm = XCreateBitmapFromData(dpy, win, zero, 1, 1);   /* 16장의 함수 */
+XColor black = { 0 };                                       /* RGB 모두 0 */
+Cursor invisible = XCreatePixmapCursor(dpy, bm, bm, &amp;black, &amp;black, 0, 0);
+XFreePixmap(dpy, bm);                                       /* 바로 풀어도 된다 */
+XDefineCursor(dpy, win, invisible);</code></pre>
+
+<h4>XQueryBestCursor</h4>
+<pre><code>Status XQueryBestCursor(Display *display, Drawable d, unsigned int width,
+                        unsigned int height, unsigned int *width_return,
+                        unsigned int *height_return);</code></pre>
+<p>원하는 커서 크기를 주면, 그 화면(<code>d</code>로 지정)에서 실제로 쓸 수 있는 가장 가까운 크기를 돌려준다. 디스플레이마다 지원하는 최대 커서 크기가 다르기 때문이다. 돌려주는 값은 표시할 수 있는 가장 큰 크기다. 앱은 큰 커서를 지원하지 않는 디스플레이에서 더 작은 커서를 쓸 준비를 해야 한다. 오류: <code>BadDrawable</code>. 같은 일을 7장의 <code>XQueryBestSize</code>에 <code>CursorShape</code>를 주어서도 할 수 있다.</p>
+
+<h4>XRecolorCursor</h4>
+<pre><code>XRecolorCursor(Display *display, Cursor cursor, XColor *foreground_color,
+               XColor *background_color);</code></pre>
+<p>커서 색을 바꾼다. 그 커서가 지금 화면에 보이고 있으면 바로 바뀐다. <code>XColor</code>의 <code>pixel</code> 멤버는 무시되고 RGB 값(<code>red</code>, <code>green</code>, <code>blue</code>, 각각 0~65535)만 쓰인다. 즉 컬러맵에 색을 할당할 필요가 없다. 오류: <code>BadCursor</code>.</p>
+<pre><code>XColor fg = { .red = 0xffff, .green = 0, .blue = 0 };          /* 빨강 */
+XColor bg = { .red = 0xffff, .green = 0xffff, .blue = 0xffff };  /* 흰색 */
+XRecolorCursor(dpy, busy, &amp;fg, &amp;bg);</code></pre>
+<div class="tip">RGB는 8비트(0~255)가 아니라 16비트(0~65535) 값이다. 255를 넣으면 거의 검정이 된다. 8비트 값을 쓰려면 <code>v * 257</code>(또는 <code>v &lt;&lt; 8 | v</code>)로 늘린다.</div>
+
+<h4>XFreeCursor</h4>
+<pre><code>XFreeCursor(Display *display, Cursor cursor);</code></pre>
+<p>커서 ID와 커서 사이의 연결을 끊는다. 실제 메모리는 다른 자원이 그 커서를 참조하지 않을 때 풀린다. 예를 들어 윈도에 <code>XDefineCursor</code>로 붙어 있다면 그 윈도는 계속 그 커서를 보여 줄 수 있다. 푼 ID는 다시 쓰면 안 된다. 오류: <code>BadCursor</code>.</p>
+<div class="tip">"참조가 남으면 실제로는 안 풀린다"는 규칙 덕분에, 커서를 윈도에 정한 직후 <code>XFreeCursor</code>를 불러도 윈도의 커서는 그대로 유지된다. 다시 쓸 일이 없는 커서라면 이렇게 바로 풀어 두는 것이 깔끔하다.</div>
+</section><div class="pager"><a href="ch4.html">← 4장. 윈도 정보 함수 (Window Information Functions)</a><a href="./">차례</a><a href="ch6.html">6장. 색 관리 함수 (Color Management Functions) →</a></div>
+<a class="top" href="#">↑ 위로</a>
+</html>

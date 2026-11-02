@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>2장. 디스플레이 함수 (Display Functions) — Xlib 한국어</title>
+<style>
+body{font:16px/1.75 system-ui,"Malgun Gothic",sans-serif;max-width:860px;margin:40px auto;padding:0 16px;background:#111;color:#e8e8e8}
+a{color:#7cf} h1{line-height:1.3} h2{margin-top:3em;border-bottom:1px solid #444;padding-bottom:.3em} h2 small{color:#999;font-weight:normal;font-size:.6em}
+h3{margin-top:2em;color:#fd8} h4{color:#9df}
+code{font-family:ui-monospace,Consolas,monospace;font-size:.92em;background:#222;padding:1px 4px;border-radius:3px}
+pre{background:#1b1d22;border:1px solid #333;padding:12px;overflow-x:auto;border-radius:6px;line-height:1.45} pre code{background:none;padding:0}
+.tip{background:#1d2a1d;border-left:4px solid #6c6;padding:8px 12px;margin:1em 0;border-radius:4px}
+table{border-collapse:collapse;margin:1em 0;font-size:.92em;display:block;overflow-x:auto} td,th{border:1px solid #444;padding:4px 8px;vertical-align:top} th{background:#222}
+nav ol{columns:2} .top{position:fixed;right:16px;bottom:16px;background:#333;padding:6px 10px;border-radius:6px;text-decoration:none}
+.pager{display:flex;justify-content:space-between;gap:12px;margin:2em 0;padding-top:1em;border-top:1px solid #444} .pager a{text-decoration:none}
+</style>
+<p><a href="../../">← 조이봉방</a> · <a href="./">Xlib 번역 차례</a></p><div class="pager"><a href="ch1.html">← 1장. Xlib 소개 (Introduction to Xlib)</a><a href="./">차례</a><a href="ch3.html">3장. 창 함수 (Window Functions) →</a></div><section id="ch2"><h2 style="margin-top:1em">2장. 디스플레이 함수 <small>(Display Functions)</small></h2>
+
+<p>프로그램이 디스플레이를 쓰려면 먼저 X 서버와 연결해야 한다. 연결이 되면 이 장의 매크로와 함수로 디스플레이에 관한 정보를 얻을 수 있다. 이 장은 다음을 다룬다.</p>
+<ul>
+<li>디스플레이 열기(서버에 연결)</li>
+<li>디스플레이, 이미지 형식, 스크린 정보 얻기</li>
+<li><code>NoOperation</code> 프로토콜 요청 보내기</li>
+<li>Xlib이 만든 데이터 해제</li>
+<li>디스플레이 닫기(연결 끊기)와 그때 서버가 하는 일</li>
+<li>스레드와 함께 Xlib 쓰기</li>
+<li>내부 연결(internal connection) 다루기</li>
+</ul>
+
+<h3>2.1 디스플레이 열기</h3>
+<pre><code>Display *XOpenDisplay(char *display_name);</code></pre>
+<p><strong>목적</strong>: X 서버와 연결하고, 그 연결을 나타내는 <code>Display</code> 구조체 포인터를 돌려준다.</p>
+<p><code>display_name</code>은 어느 디스플레이에 어떤 통신 방식으로 붙을지 정한다. POSIX 시스템에서 <code>NULL</code>을 넘기면 환경 변수 <code>DISPLAY</code>의 값을 쓴다. 이름의 해석은 구현마다 다를 수 있지만, POSIX 시스템에서는 보통 다음 형식이다.</p>
+<pre><code>protocol/hostname:number.screen_number</code></pre>
+<table>
+<tr><th>부분</th><th>뜻</th></tr>
+<tr><td><code>protocol</code></td><td>프로토콜 계열(또는 그 별칭). 생략 가능하며, 생략하면 <code>/</code>도 쓰지 않는다. 지원 계열은 구현마다 다르다.</td></tr>
+<tr><td><code>hostname</code></td><td>디스플레이가 물리적으로 붙어 있는 컴퓨터 이름. 뒤에 콜론 하나(<code>:</code>) 또는 둘(<code>::</code>)이 온다.</td></tr>
+<tr><td><code>number</code></td><td>그 컴퓨터의 몇 번째 디스플레이 서버인가. 보통 0부터 센다. 뒤에 마침표(<code>.</code>)를 붙일 수 있다.</td></tr>
+<tr><td><code>screen_number</code></td><td>그 서버에서 쓸 스크린 번호. 이 값이 <code>DefaultScreen</code> 매크로가 돌려주는 값이 된다.</td></tr>
+</table>
+<p>예를 들어 <code>dual-headed:0.1</code>은 "dual-headed라는 컴퓨터의 0번 디스플레이, 1번 스크린"이다. 흔히 보는 <code>:0</code>은 호스트 이름이 없으므로 "이 컴퓨터의 0번 디스플레이"이다.</p>
+<h4>통신 방식이 정해지는 규칙</h4>
+<ul>
+<li>프로토콜이 <code>tcp</code>, <code>inet</code>, <code>inet6</code>이거나, 프로토콜 없이 호스트 이름과 콜론 하나가 있으면 TCP로 연결한다. <code>inet</code>은 IPv4, <code>inet6</code>은 IPv6, 그 밖에는 구현이 IP 버전을 고른다.</li>
+<li>호스트 이름과 프로토콜이 모두 없으면(<code>:0</code>), Xlib이 가장 빠르다고 판단하는 전송 방식(보통 로컬 IPC)을 쓴다.</li>
+<li>호스트 이름 뒤에 콜론 두 개(<code>::</code>)면 DECnet으로 연결한다.</li>
+</ul>
+<p>서버 하나가 여러 전송 방식을 동시에 지원할 수 있고, 구현에 따라 더 많은 방식을 지원하기도 한다.</p>
+<p>성공하면 <code>&lt;X11/Xlib.h&gt;</code>에 정의된 <code>Display</code> 구조체의 포인터를, 실패하면 <code>NULL</code>을 돌려준다. 연결에 성공하면 그 디스플레이의 <strong>모든 스크린</strong>을 쓸 수 있다. <code>Display</code>와 <code>Screen</code> 구조체의 멤버는 <strong>반드시 정보 매크로나 함수로만</strong> 읽어야 한다. 서버는 접근 제어를 할 수 있다(9.8절). 권한이 없으면 연결이 거부된다.</p>
+<div class="tip">
+<ul>
+<li><code>XOpenDisplay</code>의 반환값은 반드시 <code>NULL</code> 검사를 한다. SSH 원격 접속에서 X 전달을 안 켰거나 <code>DISPLAY</code>가 비어 있으면 <code>NULL</code>이 온다. 검사 없이 쓰면 바로 세그폴트가 난다.</li>
+<li><code>Display</code>는 "연결 하나"다. 한 프로그램이 여러 서버에 붙으려면 <code>XOpenDisplay</code>를 여러 번 부르고, 각 연결의 리소스 ID를 섞어 쓰지 않는다.</li>
+</ul>
+</div>
+
+<h3>2.2 디스플레이·이미지 형식·스크린 정보 얻기</h3>
+<p>Xlib은 <code>Display</code> 구조체에서 데이터를 꺼내는 매크로와, 같은 일을 하는 함수를 짝으로 제공한다. <strong>C에서는 매크로를 쓰고</strong>, 함수(이름 앞에 <code>X</code>가 붙은 것)는 매크로를 쓸 수 없는 다른 언어 바인딩을 위한 것이다. 매크로가 정의되지 않은 <code>Display</code> 멤버는 Xlib 전용이므로 직접 읽거나 고치면 안 된다.</p>
+<div class="tip">원문이 직접 사과하는 이름 실수가 있다. <code>XDisplayWidth</code>, <code>XDisplayHeight</code>, <code>XDisplayCells</code>, <code>XDisplayPlanes</code>, <code>XDisplayWidthMM</code>, <code>XDisplayHeightMM</code>은 이름에 Display가 들어 있지만 실제로는 <strong>스크린 하나</strong>에 관한 값이다(그래서 <code>screen_number</code>를 받는다). 원래 Screen&hellip;이라고 불렀어야 했다.</div>
+
+<h4>2.2.1 디스플레이 매크로</h4>
+<p><code>Display</code>와 <code>Screen</code>의 멤버는 읽기 전용으로 여긴다. 다만 디스플레이에 대한 다른 작업의 결과로 값이 바뀔 수는 있다. 아래 표에서 매크로와 함수는 같은 값을 돌려준다. 대부분 <code>(display, screen_number)</code> 또는 <code>(display)</code>를 받는다.</p>
+<table>
+<tr><th>매크로 / 함수</th><th>돌려주는 값</th></tr>
+<tr><td><code>AllPlanes</code> / <code>unsigned long XAllPlanes(void)</code></td><td>모든 비트가 1인 값. 함수의 plane 마스크 인자에 쓴다.</td></tr>
+<tr><td><code>BlackPixel(display, screen_number)</code> / <code>XBlackPixel</code></td><td>그 스크린의 "검정" 픽셀 값(<code>unsigned long</code>).</td></tr>
+<tr><td><code>WhitePixel(display, screen_number)</code> / <code>XWhitePixel</code></td><td>그 스크린의 "흰색" 픽셀 값.</td></tr>
+<tr><td><code>ConnectionNumber(display)</code> / <code>XConnectionNumber</code></td><td>연결 번호. POSIX에서는 연결의 <strong>파일 기술자(fd)</strong>다.</td></tr>
+<tr><td><code>DefaultColormap(display, screen_number)</code> / <code>XDefaultColormap</code></td><td>그 스크린의 기본 컬러맵 ID. 일상적인 색 할당은 여기서 한다.</td></tr>
+<tr><td><code>DefaultDepth(display, screen_number)</code> / <code>XDefaultDepth</code></td><td>기본 루트 창의 깊이(plane 수). 다른 깊이도 지원될 수 있다(<code>XMatchVisualInfo</code>).</td></tr>
+<tr><td><code>DefaultGC(display, screen_number)</code> / <code>XDefaultGC</code></td><td>그 스크린 루트 창용 기본 GC. 전경=검정, 배경=흰색으로 초기화돼 있다.</td></tr>
+<tr><td><code>DefaultRootWindow(display)</code> / <code>XDefaultRootWindow</code></td><td>기본 스크린의 루트 창.</td></tr>
+<tr><td><code>DefaultScreenOfDisplay(display)</code> / <code>XDefaultScreenOfDisplay</code></td><td>기본 스크린의 <code>Screen *</code>.</td></tr>
+<tr><td><code>ScreenOfDisplay(display, screen_number)</code> / <code>XScreenOfDisplay</code></td><td>지정한 스크린의 <code>Screen *</code>.</td></tr>
+<tr><td><code>DefaultScreen(display)</code> / <code>XDefaultScreen</code></td><td><code>XOpenDisplay</code>에 지정된 기본 스크린 번호. 스크린 하나만 쓰는 프로그램은 이 값을 쓴다.</td></tr>
+<tr><td><code>DefaultVisual(display, screen_number)</code> / <code>XDefaultVisual</code></td><td>기본 비주얼(<code>Visual *</code>, 3.1절).</td></tr>
+<tr><td><code>DisplayCells(display, screen_number)</code> / <code>XDisplayCells</code></td><td>기본 컬러맵의 항목 수.</td></tr>
+<tr><td><code>DisplayPlanes(display, screen_number)</code> / <code>XDisplayPlanes</code></td><td>그 스크린 루트 창의 깊이.</td></tr>
+<tr><td><code>DisplayString(display)</code> / <code>XDisplayString</code></td><td><code>XOpenDisplay</code>에 넘긴 문자열. <code>NULL</code>을 넘겼다면 그때의 <code>DISPLAY</code> 값.</td></tr>
+<tr><td><code>LastKnownRequestProcessed(display)</code> / <code>XLastKnownRequestProcessed</code></td><td>서버가 처리했다고 Xlib이 아는 마지막 요청의 전체 일련번호. 답·이벤트·오류를 받을 때 자동 갱신된다.</td></tr>
+<tr><td><code>NextRequest(display)</code> / <code>XNextRequest</code></td><td>다음 요청에 쓰일 일련번호. 일련번호는 연결마다 따로 관리된다.</td></tr>
+<tr><td><code>ProtocolVersion(display)</code> / <code>XProtocolVersion</code></td><td>X 프로토콜 주 버전(11).</td></tr>
+<tr><td><code>ProtocolRevision(display)</code> / <code>XProtocolRevision</code></td><td>서버의 부 프로토콜 개정 번호.</td></tr>
+<tr><td><code>QLength(display)</code> / <code>XQLength</code></td><td>이벤트 큐 길이. 아직 큐로 읽어 들이지 않은 이벤트가 더 있을 수 있다(<code>XEventsQueued</code> 참고).</td></tr>
+<tr><td><code>RootWindow(display, screen_number)</code> / <code>XRootWindow</code></td><td>그 스크린의 루트 창. 최상위 창을 만들 때 부모로 쓴다.</td></tr>
+<tr><td><code>ScreenCount(display)</code> / <code>XScreenCount</code></td><td>사용 가능한 스크린 수.</td></tr>
+<tr><td><code>ServerVendor(display)</code> / <code>XServerVendor</code></td><td>서버 구현의 소유자를 나타내는 널 종료 문자열.</td></tr>
+<tr><td><code>VendorRelease(display)</code> / <code>XVendorRelease</code></td><td>제조사의 서버 릴리스 번호.</td></tr>
+</table>
+
+<p>몇 가지는 따로 설명이 필요하다.</p>
+<p><strong><code>BlackPixel</code>/<code>WhitePixel</code></strong>: 흑백 응용을 만들 때 쓰는 값이다. 기본 컬러맵에 영구적으로 할당된 항목의 픽셀 값이다. 일부 스크린에서는 실제 RGB를 바꿀 수 있고, 어쨌든 진짜 검정·흰색이 아닐 수도 있다. 이름은 "상대적으로 어두운 색/밝은 색"이라는 뜻으로 받아들인다. 또 이것은 <em>픽셀 값</em>이지 RGB 값이 아니다. 0이 검정이라고 가정하면 안 된다.</p>
+<p><strong><code>DefaultGC</code></strong>: 간단한 응용의 편의를 위해 만들어 둔 GC다. Xlib 함수 내부에서 쓰지 않으므로 내용을 자유롭게 바꿔도 된다. 하지만 <strong>절대 해제(<code>XFreeGC</code>)하면 안 된다</strong>.</p>
+<p><strong><code>DisplayString</code></strong>: <code>fork</code>한 자식 프로세스가 같은 디스플레이에 새 연결을 열 때나 오류 메시지를 출력할 때 쓸모 있다. (부모와 자식이 같은 <code>Display *</code>를 함께 쓰면 연결 스트림이 꼬이므로 자식은 새로 연결하는 것이 맞다.)</p>
+
+<pre><code>int *XListDepths(Display *display, int screen_number, int *count_return);</code></pre>
+<p><strong>목적</strong>: 그 스크린에서 쓸 수 있는 깊이들의 배열을 돌려준다. 스크린 번호가 올바르고 메모리를 할당할 수 있으면 <code>count_return</code>에 개수를 넣는다. 아니면 <code>count_return</code>을 건드리지 않고 <code>NULL</code>을 돌려준다. 배열은 <code>XFree</code>로 해제한다.</p>
+
+<pre><code>long XMaxRequestSize(Display *display);
+long XExtendedMaxRequestSize(Display *display);</code></pre>
+<p><strong>목적</strong>: 서버가 받을 수 있는 요청 하나의 최대 크기(4바이트 단위)를 알려 준다.</p>
+<ul>
+<li><code>XMaxRequestSize</code>는 확장 길이 인코딩 없이 받을 수 있는 최대치다. 프로토콜은 최소 4096단위(16384바이트)를 보장한다. <code>XDrawPoints</code>, <code>XDrawRectangles</code>, <code>XDrawSegments</code>, <code>XFillArcs</code>, <code>XFillRectangles</code>, <code>XPutImage</code>는 Xlib이 필요하면 자동으로 여러 요청으로 나눈다.</li>
+<li><code>XExtendedMaxRequestSize</code>는 서버가 확장 길이(extended-length) 인코딩을 지원하지 않으면 0, 지원하면 그 최대치를 돌려준다. <code>XDrawLines</code>, <code>XDrawArcs</code>, <code>XFillPolygon</code>, <code>XChangeProperty</code>, <code>XSetClipRectangles</code>, <code>XSetRegion</code>은 지원되면 필요할 때 확장 인코딩을 쓴다. 위의 자동 분할 함수들은 확장 인코딩을 써도 되고 나눠 보내도 된다(구현 선택).</li>
+</ul>
+<div class="tip"><code>XDrawLines</code>나 <code>XFillPolygon</code>처럼 "이어진 하나의 도형"은 나눠 보내면 모양이 달라지므로 자동 분할 대상이 아니다. 아주 많은 점을 넘길 때는 이 한계를 넘지 않는지 확인한다.</div>
+
+<pre><code>/* 연결 정보를 출력하는 예 -- cc info.c -lX11 */
+#include &lt;stdio.h&gt;
+#include &lt;X11/Xlib.h&gt;
+
+int main(void)
+{
+    Display *dpy = XOpenDisplay(NULL);
+    int s, n, i, *depths;
+
+    if (!dpy) { fprintf(stderr, "no display\n"); return 1; }
+    s = DefaultScreen(dpy);
+    printf("display  : %s\n", DisplayString(dpy));
+    printf("vendor   : %s (release %d)\n", ServerVendor(dpy), VendorRelease(dpy));
+    printf("protocol : X%d.%d\n", ProtocolVersion(dpy), ProtocolRevision(dpy));
+    printf("screens  : %d (default %d)\n", ScreenCount(dpy), s);
+    printf("size     : %dx%d px, %dx%d mm\n",
+           DisplayWidth(dpy, s), DisplayHeight(dpy, s),
+           DisplayWidthMM(dpy, s), DisplayHeightMM(dpy, s));
+    printf("depth    : %d\n", DefaultDepth(dpy, s));
+
+    depths = XListDepths(dpy, s, &amp;n);
+    if (depths) {
+        printf("depths   :");
+        for (i = 0; i &lt; n; i++) printf(" %d", depths[i]);
+        printf("\n");
+        XFree(depths);
+    }
+    printf("max req  : %ld units\n", XMaxRequestSize(dpy));
+    XCloseDisplay(dpy);
+    return 0;
+}</code></pre>
+
+<h4>2.2.2 이미지 형식 함수와 매크로</h4>
+<p>응용은 서버가 요구하는 형식으로 이미지 데이터를 보내야 한다. 변환 작업 대부분은 Xlib이 대신 해 준다(8.7절, 16.8절). 직접 이미지 바이트를 다룰 때만 아래 정보가 필요하다.</p>
+<pre><code>typedef struct {
+    int depth;
+    int bits_per_pixel;
+    int scanline_pad;
+} XPixmapFormatValues;
+
+XPixmapFormatValues *XListPixmapFormats(Display *display, int *count_return);</code></pre>
+<p><strong>목적</strong>: 연결 설정 때 서버가 알려 준 Z 형식 이미지의 형식 목록을 돌려준다. 깊이마다 픽셀당 비트 수(<code>bits_per_pixel</code>)와 스캔라인 패딩(<code>scanline_pad</code>)이 있다. 예를 들어 깊이 24인데 <code>bits_per_pixel</code>이 32인 경우가 흔하다. 메모리가 부족하면 <code>NULL</code>. 결과는 <code>XFree</code>로 해제한다.</p>
+<table>
+<tr><th>매크로 / 함수</th><th>돌려주는 값</th></tr>
+<tr><td><code>ImageByteOrder(display)</code> / <code>XImageByteOrder</code></td><td>이미지 바이트 순서: XY 형식(bitmap)에서는 스캔라인 단위마다, Z 형식에서는 픽셀 값마다. <code>LSBFirst</code> 또는 <code>MSBFirst</code>.</td></tr>
+<tr><td><code>BitmapUnit(display)</code> / <code>XBitmapUnit</code></td><td>bitmap 스캔라인 단위 크기(비트). 스캔라인은 이 값의 배수로 계산된다.</td></tr>
+<tr><td><code>BitmapBitOrder(display)</code> / <code>XBitmapBitOrder</code></td><td>각 단위 안에서 화면상 가장 왼쪽 비트가 최하위 비트인지 최상위 비트인지. <code>LSBFirst</code> 또는 <code>MSBFirst</code>.</td></tr>
+<tr><td><code>BitmapPad(display)</code> / <code>XBitmapPad</code></td><td>각 스캔라인이 맞춰져야 하는 비트 배수.</td></tr>
+<tr><td><code>DisplayHeight</code> / <code>XDisplayHeight</code> (display, screen_number)</td><td>스크린 높이(픽셀).</td></tr>
+<tr><td><code>DisplayHeightMM</code> / <code>XDisplayHeightMM</code></td><td>스크린 높이(mm).</td></tr>
+<tr><td><code>DisplayWidth</code> / <code>XDisplayWidth</code></td><td>스크린 너비(픽셀).</td></tr>
+<tr><td><code>DisplayWidthMM</code> / <code>XDisplayWidthMM</code></td><td>스크린 너비(mm).</td></tr>
+</table>
+<p>픽셀 수와 mm 값을 함께 쓰면 DPI(인치당 점 수)를 계산할 수 있다: <code>DisplayWidth * 25.4 / DisplayWidthMM</code>. 다만 서버가 알려 주는 mm 값이 정확하지 않은 경우도 있다.</p>
+
+<h4>2.2.3 스크린 정보 매크로</h4>
+<p>이 묶음은 <code>display, screen_number</code> 대신 <code>Screen *</code> 하나를 받는다. <code>DefaultScreenOfDisplay</code>나 <code>ScreenOfDisplay</code>로 얻은 포인터를 넘긴다.</p>
+<table>
+<tr><th>매크로 / 함수</th><th>돌려주는 값</th></tr>
+<tr><td><code>BlackPixelOfScreen</code> / <code>XBlackPixelOfScreen</code></td><td>검정 픽셀 값.</td></tr>
+<tr><td><code>WhitePixelOfScreen</code> / <code>XWhitePixelOfScreen</code></td><td>흰색 픽셀 값.</td></tr>
+<tr><td><code>CellsOfScreen</code> / <code>XCellsOfScreen</code></td><td>기본 컬러맵의 셀 수.</td></tr>
+<tr><td><code>DefaultColormapOfScreen</code> / <code>XDefaultColormapOfScreen</code></td><td>기본 컬러맵.</td></tr>
+<tr><td><code>DefaultDepthOfScreen</code> / <code>XDefaultDepthOfScreen</code></td><td>루트 창의 깊이.</td></tr>
+<tr><td><code>DefaultGCOfScreen</code> / <code>XDefaultGCOfScreen</code></td><td>루트 창과 같은 깊이의 기본 GC. 절대 해제하지 않는다.</td></tr>
+<tr><td><code>DefaultVisualOfScreen</code> / <code>XDefaultVisualOfScreen</code></td><td>기본 비주얼.</td></tr>
+<tr><td><code>DoesBackingStore</code> / <code>XDoesBackingStore</code></td><td>backing store 지원 정도: <code>WhenMapped</code>, <code>NotUseful</code>, <code>Always</code> 중 하나(3.2.4절).</td></tr>
+<tr><td><code>DoesSaveUnders</code> / <code>XDoesSaveUnders</code></td><td>save under 지원 여부(<code>Bool</code>, 3.2.5절).</td></tr>
+<tr><td><code>DisplayOfScreen</code> / <code>XDisplayOfScreen</code></td><td>그 스크린이 속한 <code>Display *</code>.</td></tr>
+<tr><td><code>XScreenNumberOfScreen</code></td><td>스크린의 번호(<code>long</code>).</td></tr>
+<tr><td><code>EventMaskOfScreen</code> / <code>XEventMaskOfScreen</code></td><td>연결 설정 시점의 루트 창 이벤트 마스크.</td></tr>
+<tr><td><code>WidthOfScreen</code>, <code>HeightOfScreen</code></td><td>너비·높이(픽셀).</td></tr>
+<tr><td><code>WidthMMOfScreen</code>, <code>HeightMMOfScreen</code></td><td>너비·높이(mm).</td></tr>
+<tr><td><code>MaxCmapsOfScreen</code>, <code>MinCmapsOfScreen</code></td><td>동시에 설치할 수 있는 컬러맵의 최대·최소 개수(9.3절).</td></tr>
+<tr><td><code>PlanesOfScreen</code> / <code>XPlanesOfScreen</code></td><td>루트 창의 깊이.</td></tr>
+<tr><td><code>RootWindowOfScreen</code> / <code>XRootWindowOfScreen</code></td><td>그 스크린의 루트 창.</td></tr>
+</table>
+<p>(각 매크로에 대응하는 함수는 이름 앞에 <code>X</code>를 붙인 것이다. 예: <code>WidthOfScreen</code> &harr; <code>XWidthOfScreen</code>.)</p>
+
+<h3>2.3 NoOperation 요청 보내기</h3>
+<pre><code>XNoOp(Display *display);</code></pre>
+<p><strong>목적</strong>: 아무 일도 하지 않는 <code>NoOperation</code> 프로토콜 요청을 서버에 보내 연결을 "운동"시킨다. 자주 쓰지 않아 요약만 한다. 요청도 버퍼에 들어가므로 실제로 보내려면 flush가 필요하다.</p>
+
+<h3>2.4 Xlib이 만든 데이터 해제</h3>
+<pre><code>XFree(void *data);</code></pre>
+<p><strong>목적</strong>: Xlib이 할당해 돌려준 메모리를 해제하는 범용 함수다. 객체마다 전용 해제 함수가 명시돼 있지 않다면 <strong>Xlib이 할당한 것은 모두 <code>XFree</code>로</strong> 해제해야 한다(<code>XListDepths</code>, <code>XListPixmapFormats</code>의 결과 등).</p>
+<div class="tip">
+<ul>
+<li><code>XFree</code>에 <code>NULL</code>을 넘기면 안 된다. 표준 <code>free(NULL)</code>과 다르다. 반환값을 확인한 뒤 해제한다.</li>
+<li>Xlib이 준 메모리를 <code>free</code>로 풀거나, 내가 <code>malloc</code>한 메모리를 <code>XFree</code>로 풀지 않는다. 실제 구현이 같아 보여도 규약상 짝을 맞춘다.</li>
+<li><code>XFontStruct</code>처럼 전용 해제 함수(<code>XFreeFontInfo</code> 등)가 있는 객체는 그것을 쓴다.</li>
+</ul>
+</div>
+
+<h3>2.5 디스플레이 닫기</h3>
+<pre><code>XCloseDisplay(Display *display);</code></pre>
+<p><strong>목적</strong>: 서버와의 연결을 닫는다. 이때 클라이언트가 이 디스플레이에 만든 모든 창과 리소스 ID(<code>Window</code>, <code>Font</code>, <code>Pixmap</code>, <code>Colormap</code>, <code>Cursor</code>, <code>GContext</code>) 및 기타 리소스가 파괴된다(close-down 모드를 바꾸지 않았다면). 그러니 닫은 뒤 그것들을 다시 참조하면 안 된다.</p>
+<p>프로그램이 끝나기 전에 <code>XCloseDisplay</code>를 <strong>명시적으로 부르는 것이 좋다</strong>. 마지막에 <code>XSync</code>를 수행하므로 아직 보고되지 않은 오류가 보고되기 때문이다. 그냥 <code>exit</code>하면 버퍼에 남은 요청과 그 오류가 사라질 수 있다. <code>XCloseDisplay</code>는 <code>BadGC</code> 오류를 낼 수 있다.</p>
+
+<pre><code>XSetCloseDownMode(Display *display, int close_mode);</code></pre>
+<p><strong>목적</strong>: 연결이 닫힐 때 내 리소스를 어떻게 할지 정한다. 연결은 처음에 <code>DestroyAll</code> 모드다.</p>
+<ul>
+<li><code>close_mode</code>: <code>DestroyAll</code>, <code>RetainPermanent</code>, <code>RetainTemporary</code> 중 하나. 다른 값이면 <code>BadValue</code>.</li>
+</ul>
+<p>Retain 계열을 쓰면 클라이언트가 끝난 뒤에도 리소스(예: 루트 창 배경으로 쓰는 pixmap)가 서버에 남는다. 자세한 동작은 다음 절이다.</p>
+
+<h3>2.6 서버 연결이 닫힐 때 일어나는 일</h3>
+<p><code>XCloseDisplay</code>를 부르든 프로세스가 그냥 끝나든, 서버는 연결이 닫히면 자동으로 다음을 한다.</p>
+<ul>
+<li>그 클라이언트가 가진 모든 selection의 소유를 포기한다(<code>XSetSelectionOwner</code> 참고).</li>
+<li>포인터나 키보드를 능동적으로 grab하고 있었다면 <code>XUngrabPointer</code>, <code>XUngrabKeyboard</code>를 한다.</li>
+<li>서버를 grab하고 있었다면 <code>XUngrabServer</code>를 한다.</li>
+<li>그 클라이언트의 모든 수동(passive) grab을 해제한다.</li>
+<li>close-down 모드가 <code>RetainPermanent</code>나 <code>RetainTemporary</code>면, 클라이언트가 할당한 모든 리소스(컬러맵 항목 포함)를 영구 또는 임시로 표시한다. 그래도 다른 클라이언트가 명시적으로 파괴하는 것까지 막지는 않는다(<code>XKillClient</code>로 지울 수 있다).</li>
+</ul>
+<p>close-down 모드가 <code>DestroyAll</code>이면 서버는 리소스를 다음처럼 파괴한다.</p>
+<ul>
+<li><strong>save-set 처리</strong>: save-set은 "다른 클라이언트의 창" 목록이다(주로 창 관리자가 씀). 각 save-set 창이 이 클라이언트가 만든 창의 하위 창이면, 그 창을 가장 가까운 (이 클라이언트 것이 아닌) 조상으로 reparent한다. 루트 기준 바깥 왼쪽 위 모서리의 절대 좌표는 그대로 유지된다. 그리고 save-set 창이 unmap돼 있으면 <code>MapWindow</code>를 수행한다(하위 창이 아니었더라도). 덕분에 창 관리자가 죽어도 그 프레임 안에 있던 응용 창들이 사라지지 않고 루트로 돌아온다.</li>
+<li>이 클라이언트가 만든 모든 창을 파괴한다.</li>
+<li>창이 아닌 리소스(<code>Font</code>, <code>Pixmap</code>, <code>Cursor</code>, <code>Colormap</code>, <code>GContext</code>)마다 해당 해제 요청을 수행한다.</li>
+<li>할당한 모든 색과 컬러맵 항목을 해제한다.</li>
+</ul>
+<p>서버는 "연결 없음"과 "연결 있음" 상태를 오간다. <code>DestroyAll</code> 모드의 연결이 닫혀 <strong>마지막 연결</strong>이 사라지면, 서버는 막 시작한 것처럼 상태를 리셋한다.</p>
+<ul>
+<li><code>RetainPermanent</code>/<code>RetainTemporary</code>로 끝난 클라이언트들이 남긴 리소스를 모두 파괴한다.</li>
+<li>미리 정의된 것 외의 모든 아톰을 지운다.</li>
+<li>모든 루트 창의 모든 속성(property)을 지운다(4.3절).</li>
+<li>모든 장치 맵과 속성(키 클릭, 벨 볼륨, 가속 등)과 접근 제어 목록을 리셋한다.</li>
+<li>표준 루트 타일과 커서를 복구한다.</li>
+<li>기본 글꼴 경로를 복구한다.</li>
+<li>입력 포커스를 <code>PointerRoot</code>로 되돌린다.</li>
+</ul>
+<p>단, 마지막 연결이 <code>RetainPermanent</code>나 <code>RetainTemporary</code> 모드로 닫혔다면 서버는 리셋하지 않는다.</p>
+<div class="tip">grab을 건 채로 프로그램이 멈추면(무한 루프 등) 화면 전체가 입력을 받지 않는 것처럼 보인다. 프로세스를 죽이면 연결이 닫히면서 서버가 grab을 자동으로 풀어 준다.</div>
+
+<h3>2.7 스레드와 함께 Xlib 쓰기</h3>
+<p>스레드가 있는 시스템에서는 여러 스레드가 Xlib을 동시에 쓸 수 있도록 지원할 수 있다.</p>
+<pre><code>Status XInitThreads(void);</code></pre>
+<p><strong>목적</strong>: Xlib의 동시 스레드 지원을 초기화한다.</p>
+<ul>
+<li>멀티스레드 프로그램이 부르는 <strong>첫 번째 Xlib 함수</strong>여야 하고, 다른 어떤 Xlib 호출보다 먼저 끝나야 한다. <code>XOpenDisplay</code>보다도 먼저다.</li>
+<li>성공하면 0이 아닌 값, 실패하면 0. 스레드를 지원하지 않는 시스템에서는 항상 0.</li>
+<li>여러 스레드가 Xlib을 <em>동시에</em> 쓸 수 있을 때만 필요하다. 툴킷의 뮤텍스나 직접 만든 잠금으로 모든 Xlib 호출을 보호한다면 필요 없다.</li>
+<li>단일 스레드 프로그램은 부르지 않는 것이 권장된다(잠금 비용이 생긴다).</li>
+</ul>
+
+<pre><code>XLockDisplay(Display *display);
+XUnlockDisplay(Display *display);</code></pre>
+<p><strong>목적</strong>: 여러 Xlib 호출을 하나로 묶어, 그 동안 다른 스레드가 같은 디스플레이를 쓰지 못하게 한다. 다른 스레드는 잠금이 풀릴 때까지 블록된다. 중첩 호출이 올바르게 동작하므로, <code>XLockDisplay</code>를 부른 횟수만큼 <code>XUnlockDisplay</code>를 불러야 실제로 풀린다. <code>XInitThreads</code>가 성공하지 않았다면 둘 다 아무 효과가 없다.</p>
+<pre><code>/* cc thr.c -lX11 -lpthread */
+#include &lt;X11/Xlib.h&gt;
+
+int main(void)
+{
+    Display *dpy;
+    if (!XInitThreads())          /* 반드시 맨 처음 */
+        return 1;
+    dpy = XOpenDisplay(NULL);
+    if (!dpy) return 1;
+
+    /* ... 여러 스레드를 만든다 ... */
+
+    /* 어떤 스레드에서: 두 호출 사이에 다른 스레드가 끼어들지 않게 */
+    XLockDisplay(dpy);
+    /* XMoveWindow(...); XRaiseWindow(...); 등 */
+    XUnlockDisplay(dpy);
+
+    XCloseDisplay(dpy);
+    return 0;
+}</code></pre>
+<div class="tip"><code>XInitThreads</code>를 늦게(이미 <code>XOpenDisplay</code>를 한 뒤에) 부르는 것은 흔한 실수이며, 이후 동작은 보장되지 않는다. 또 한 스레드가 <code>XNextEvent</code>에서 기다리는 동안 다른 스레드가 같은 디스플레이를 쓰는 구조는 설계가 까다롭다. 가능하면 Xlib 호출을 한 스레드에 모으는 편이 단순하다.</div>
+
+<h3>2.8 내부 연결 사용</h3>
+<p>Xlib 구현은 X 서버 연결 외에 다른 서버(예: 13장의 입력 메서드 서버)와 연결이 필요할 수 있다. 여러 디스플레이를 쓰거나 디스플레이와 다른 입력(소켓, 파이프 등)을 함께 <code>select</code>/<code>poll</code>로 기다리는 툴킷·클라이언트는 이런 추가 연결도 알아야 제대로 블록하고 입력을 처리할 수 있다. <strong>디스플레이 하나만 쓰고 Xlib 이벤트 함수에서 기다리는 단순한 클라이언트는 이 기능이 필요 없다.</strong></p>
+
+<pre><code>typedef void (*XConnectionWatchProc)(Display *display, XPointer client_data,
+                                     int fd, Bool opening, XPointer *watch_data);
+
+Status XAddConnectionWatch(Display *display, XConnectionWatchProc procedure,
+                           XPointer client_data);</code></pre>
+<p><strong>목적</strong>: Xlib이 그 디스플레이용 내부 연결을 열거나 닫을 때마다 불릴 콜백을 등록한다.</p>
+<ul>
+<li>콜백은 display, 등록 때 준 <code>client_data</code>, 연결의 fd, 여는 중인지(<code>opening</code>), 그리고 개인 데이터를 둘 자리(<code>watch_data</code>)를 받는다. <code>opening</code>이 <code>True</code>일 때 <code>*watch_data</code>에 포인터를 저장해 두면, 같은 연결이 닫힐 때(<code>opening</code>이 <code>False</code>) 그 포인터가 그대로 들어 있다.</li>
+<li>디스플레이를 연 뒤 언제든 부를 수 있다. 이미 내부 연결이 있으면, 반환하기 전에 각각에 대해 콜백이 즉시 불린다.</li>
+<li>등록 성공 시 0이 아닌 값, 실패 시 0.</li>
+</ul>
+<div class="tip">콜백 안에서는 <strong>Xlib 함수를 부르면 안 된다</strong>. 콜백이 직간접으로 내부 연결이나 watch 상태를 바꾸면 결과가 정의되지 않는다. 스레드 초기화가 돼 있으면 콜백은 디스플레이가 잠긴 상태로 불리므로, 그 스레드가 미리 <code>XLockDisplay</code>로 바깥에서 잠그지 않았다면 디스플레이를 잠그는 Xlib 함수 호출 결과는 정의되지 않는다. 콜백에서는 fd를 내 <code>select</code> 집합에 넣고 빼는 일만 한다.</div>
+
+<pre><code>Status XRemoveConnectionWatch(Display *display, XConnectionWatchProc procedure,
+                              XPointer client_data);</code></pre>
+<p><strong>목적</strong>: 등록한 콜백을 제거한다. <code>client_data</code>가 등록 때와 같아야 한다.</p>
+
+<pre><code>void XProcessInternalConnection(Display *display, int fd);</code></pre>
+<p><strong>목적</strong>: 내부 연결에 도착한 입력을 처리한다. <code>select</code>나 <code>poll</code>이 그 fd에 입력이 있다고 알려 준 <strong>뒤에만</strong> 불러야 한다. 아니면 결과가 정의되지 않는다.</p>
+
+<pre><code>Status XInternalConnectionNumbers(Display *display, int **fd_return, int *count_return);</code></pre>
+<p><strong>목적</strong>: 현재 열려 있는 모든 내부 연결의 fd 목록을 돌려준다. 목록은 다 쓰면 <code>XFree</code>로 해제한다. 목록 할당에 성공하면 0이 아닌 값, 아니면 0.</p>
+
+<pre><code>/* X 연결과 표준 입력을 함께 기다리는 골격 (내부 연결은 생략) */
+#include &lt;sys/select.h&gt;
+#include &lt;unistd.h&gt;
+#include &lt;X11/Xlib.h&gt;
+
+void loop(Display *dpy)
+{
+    int xfd = ConnectionNumber(dpy);
+    XEvent ev;
+    for (;;) {
+        fd_set rfds;
+        XFlush(dpy);                       /* 기다리기 전에 요청을 내보낸다 */
+        while (XPending(dpy)) {            /* 이미 읽힌 이벤트 먼저 처리 */
+            XNextEvent(dpy, &amp;ev);
+            /* ... 이벤트 처리 ... */
+        }
+        FD_ZERO(&amp;rfds);
+        FD_SET(xfd, &amp;rfds);
+        FD_SET(STDIN_FILENO, &amp;rfds);
+        if (select(xfd + 1, &amp;rfds, NULL, NULL, NULL) &lt; 0)
+            break;
+        if (FD_ISSET(STDIN_FILENO, &amp;rfds)) {
+            /* ... 표준 입력 처리 ... */
+        }
+    }
+}</code></pre>
+<div class="tip"><code>ConnectionNumber</code>의 fd만 <code>select</code>하면 함정이 있다. Xlib이 이미 소켓에서 읽어 큐에 넣어 둔 이벤트는 fd에 더 이상 "읽을 것"으로 나타나지 않는다. 그래서 <code>select</code> 전에 <code>XPending</code>으로 큐를 비우는 것이 중요하다.</div>
+</section><div class="pager"><a href="ch1.html">← 1장. Xlib 소개 (Introduction to Xlib)</a><a href="./">차례</a><a href="ch3.html">3장. 창 함수 (Window Functions) →</a></div>
+<a class="top" href="#">↑ 위로</a>
+</html>

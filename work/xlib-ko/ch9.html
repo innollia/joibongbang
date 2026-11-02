@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>9장. 윈도 매니저·세션 매니저 함수 (Window and Session Manager Functions) — Xlib 한국어</title>
+<style>
+body{font:16px/1.75 system-ui,"Malgun Gothic",sans-serif;max-width:860px;margin:40px auto;padding:0 16px;background:#111;color:#e8e8e8}
+a{color:#7cf} h1{line-height:1.3} h2{margin-top:3em;border-bottom:1px solid #444;padding-bottom:.3em} h2 small{color:#999;font-weight:normal;font-size:.6em}
+h3{margin-top:2em;color:#fd8} h4{color:#9df}
+code{font-family:ui-monospace,Consolas,monospace;font-size:.92em;background:#222;padding:1px 4px;border-radius:3px}
+pre{background:#1b1d22;border:1px solid #333;padding:12px;overflow-x:auto;border-radius:6px;line-height:1.45} pre code{background:none;padding:0}
+.tip{background:#1d2a1d;border-left:4px solid #6c6;padding:8px 12px;margin:1em 0;border-radius:4px}
+table{border-collapse:collapse;margin:1em 0;font-size:.92em;display:block;overflow-x:auto} td,th{border:1px solid #444;padding:4px 8px;vertical-align:top} th{background:#222}
+nav ol{columns:2} .top{position:fixed;right:16px;bottom:16px;background:#333;padding:6px 10px;border-radius:6px;text-decoration:none}
+.pager{display:flex;justify-content:space-between;gap:12px;margin:2em 0;padding-top:1em;border-top:1px solid #444} .pager a{text-decoration:none}
+</style>
+<p><a href="../../">← 조이봉방</a> · <a href="./">Xlib 번역 차례</a></p><div class="pager"><a href="ch8.html">← 8장. 그래픽 함수 (Graphics Functions)</a><a href="./">차례</a><a href="ch10.html">10장. 이벤트 (Events) →</a></div><section id="ch9"><h2 style="margin-top:1em">9장. 윈도 매니저·세션 매니저 함수 <small>(Window and Session Manager Functions)</small></h2>
+
+<p>어떤 함수를 "앱용", "윈도 매니저용"으로 딱 나누기는 어렵지만, 이 장의 함수들은 주로 <b>윈도 매니저</b>(창에 테두리와 제목 표시줄을 달고 위치를 관리하는 프로그램)와 <b>세션 매니저</b>가 쓴다. 일반 앱이 쓸 일은 많지 않다. 다루는 내용은 창의 부모 바꾸기, 창 수명 관리(save-set), 설치된 컬러맵 관리, 폰트 검색 경로, 서버 잡기(grab), 클라이언트 강제 종료, 화면 보호기, 호스트 접근 제어다.</p>
+
+<h3>9.1 창의 부모 바꾸기 <small>(Changing the Parent of a Window)</small></h3>
+<pre><code>XReparentWindow(Display *display, Window w, Window parent, int x, int y);</code></pre>
+<p>창 <code>w</code>를 <b>같은 화면</b>의 다른 창 <code>parent</code>의 자식으로 옮긴다. 화면 사이로 옮기는 방법은 없다. 윈도 매니저는 이 함수로 앱의 창을 자기 "틀(frame)" 창 안에 넣어 테두리와 제목 표시줄을 단다.</p>
+<ul>
+<li><code>x</code>, <code>y</code>: 새 부모 안에서의 위치.</li>
+<li>창이 맵되어 있으면 자동으로 <code>UnmapWindow</code>를 한 뒤 계층에서 떼어 새 부모의 자식으로 넣는다. 형제들 사이에서 쌓임 순서는 <b>맨 위</b>가 된다.</li>
+<li>옮긴 뒤 서버가 <code>ReparentNotify</code> 이벤트를 만든다. 이 이벤트의 <code>override_redirect</code>는 창의 해당 속성 값이다. 윈도 매니저는 이 값이 <code>True</code>인 창(메뉴, 툴팁 등)은 보통 무시해야 한다.</li>
+<li>원래 맵되어 있었으면 마지막에 자동으로 <code>MapWindow</code>를 한다.</li>
+<li>예전에 가려졌던 창들에 대해서는 보통의 노출 처리를 한다. 다만 처음 <code>UnmapWindow</code>로 드러났다가 마지막 <code>MapWindow</code>로 곧바로 다시 가려지는 부분에는 <code>Expose</code>가 생기지 않을 수 있다.</li>
+</ul>
+<p><code>BadMatch</code>가 나는 경우:</p>
+<ul>
+<li>새 부모가 이전 부모와 다른 화면에 있다.</li>
+<li>새 부모가 <code>w</code> 자신이거나 <code>w</code>의 자손이다.</li>
+<li>새 부모가 <code>InputOnly</code>인데 <code>w</code>는 아니다.</li>
+<li><code>w</code>의 배경이 <code>ParentRelative</code>인데 새 부모의 깊이가 <code>w</code>와 다르다.</li>
+</ul>
+<p>오류: <code>BadMatch</code>, <code>BadWindow</code>.</p>
+<pre><code>/* 윈도 매니저 스타일: 틀 창을 만들고 앱 창을 그 안으로 */
+Window frame = XCreateSimpleWindow(dpy, root, ax, ay, aw + 4, ah + 24, 1,
+                                   BlackPixel(dpy, scr), WhitePixel(dpy, scr));
+XAddToSaveSet(dpy, app);                 /* WM이 죽어도 앱 창은 살아남게 (9.2) */
+XReparentWindow(dpy, app, frame, 2, 22);
+XMapWindow(dpy, frame);</code></pre>
+
+<h3>9.2 창의 수명 관리 <small>(Controlling the Lifetime of a Window)</small></h3>
+<p>클라이언트의 <b>save-set</b>은 다른 클라이언트가 만든 창들의 목록이다. 이 클라이언트의 연결이 끊길 때 이 목록의 창이 이 클라이언트 창의 자손으로 들어가 있으면, 그 창은 파괴되지 않고, 언맵되어 있었다면 다시 맵된다(연결 종료 처리는 2.6절).</p>
+<p>왜 필요한가: 창의 부모가 파괴되면 보통 자식도 함께 파괴된다. 윈도 매니저가 앱 창을 자기 틀 창 안에 넣은(reparent) 상태에서 윈도 매니저가 죽거나 끝나면 틀 창이 사라지면서 앱 창도 같이 사라져 버린다. save-set에 넣어 두면 앱 창은 파괴되지 않고 원래 계층 위치로 돌아간다. 창이 파괴되면 서버가 save-set에서 자동으로 뺀다.</p>
+<pre><code>XChangeSaveSet(Display *display, Window w, int change_mode);
+XAddToSaveSet(Display *display, Window w);
+XRemoveFromSaveSet(Display *display, Window w);</code></pre>
+<ul>
+<li><code>XChangeSaveSet</code>: <code>change_mode</code>가 <code>SetModeInsert</code>면 넣고, <code>SetModeDelete</code>면 뺀다. 오류: <code>BadMatch</code>, <code>BadValue</code>, <code>BadWindow</code>.</li>
+<li><code>XAddToSaveSet</code>, <code>XRemoveFromSaveSet</code>: 넣기, 빼기 전용 함수. 오류: <code>BadMatch</code>, <code>BadWindow</code>.</li>
+<li>세 함수 모두 창이 <b>다른 클라이언트가 만든 것</b>이어야 한다. 자기가 만든 창을 넣으면 <code>BadMatch</code>.</li>
+</ul>
+
+<h3>9.3 설치된 컬러맵 관리 <small>(Managing Installed Colormaps)</small></h3>
+<p>서버는 설치된(installed) 컬러맵 목록을 관리한다. 설치된 컬러맵을 쓰는 창은 제 색으로 보이는 것이 보장되고, 나머지는 제 색으로 보일 수도 아닐 수도 있다(6장 앞부분 참고).</p>
+<p>설치된 맵 중 일부는 순서 있는 목록인 <b>required list</b>로 관리된다. 길이는 최대 M이고, M은 연결 설정 때 알려 주는 그 화면의 최소 설치 컬러맵 수다.</p>
+<ul>
+<li><code>XInstallColormap</code>에 준 컬러맵은 목록 <b>맨 앞</b>에 들어가고, 길이가 M을 넘으면 뒤에서 잘린다.</li>
+<li><code>XUninstallColormap</code>에 준 컬러맵이 목록에 있으면 빠진다.</li>
+<li>서버가 스스로(암묵적으로) 설치한 컬러맵은 목록에 들어가지 않고, 서버는 목록에 있는 컬러맵을 스스로 설치 해제할 수 없다.</li>
+</ul>
+
+<h4>XInstallColormap</h4>
+<pre><code>XInstallColormap(Display *display, Colormap colormap);</code></pre>
+<p>컬러맵을 그 화면에 설치한다. 이 컬러맵을 쓰는 창(<code>XCreateWindow</code>, <code>XCreateSimpleWindow</code>, <code>XChangeWindowAttributes</code>, <code>XSetWindowColormap</code>으로 연결한 창)이 즉시 제 색으로 보인다. 이미 설치된 것이 아니었다면 그 컬러맵을 쓰는 각 창에 <code>ColormapNotify</code> 이벤트가 생기고, 이 호출 때문에 설치(또는 해제)된 다른 컬러맵을 쓰는 창에도 <code>ColormapNotify</code>가 생긴다. 오류: <code>BadColor</code>.</p>
+<div class="tip">일반 앱은 직접 설치하지 않는 것이 관례다(ICCCM). 창의 <code>WM_COLORMAP_WINDOWS</code> 속성 등으로 윈도 매니저에게 맡기고, 설치는 포커스를 가진 창에 맞춰 윈도 매니저가 한다.</div>
+
+<h4>XUninstallColormap</h4>
+<pre><code>XUninstallColormap(Display *display, Colormap colormap);</code></pre>
+<p>컬러맵을 그 화면의 required list에서 뺀다. 그 결과 이 컬러맵이 설치 해제될 수 있고, 서버가 다른 컬러맵을 스스로 설치하거나 해제할 수도 있다. 어느 것이 바뀔지는 서버마다 다르지만 required list는 계속 설치되어 있어야 한다. 설치 해제되면 그 컬러맵을 쓰는 창마다, 그리고 이 호출로 설치·해제된 다른 컬러맵을 쓰는 창마다 <code>ColormapNotify</code>가 생긴다. 오류: <code>BadColor</code>.</p>
+
+<h4>XListInstalledColormaps</h4>
+<pre><code>Colormap *XListInstalledColormaps(Display *display, Window w, int *num_return);</code></pre>
+<p>창 <code>w</code>가 있는 화면에 현재 설치된 컬러맵 목록을 돌려준다. 목록의 순서는 의미가 없고 required list를 나타내지도 않는다. 다 쓰면 <code>XFree</code>로 해제한다. 오류: <code>BadWindow</code>.</p>
+<pre><code>int n;
+Colormap *maps = XListInstalledColormaps(dpy, root, &amp;n);
+printf("설치된 컬러맵 %d개\n", n);
+XFree(maps);</code></pre>
+
+<h3>9.4 폰트 검색 경로 <small>(Setting and Retrieving the Font Search Path)</small></h3>
+<p>서버에서 쓸 수 있는 폰트는 폰트 검색 경로에 따라 정해진다.</p>
+<h4>XSetFontPath</h4>
+<pre><code>XSetFontPath(Display *display, char **directories, int ndirs);</code></pre>
+<p>폰트를 찾을 경로 목록을 정한다.</p>
+<ul>
+<li>검색 경로는 클라이언트마다가 아니라 <b>서버에 하나</b>뿐이다. 바꾸면 그 서버의 모든 클라이언트에 영향이 간다.</li>
+<li>빈 목록을 주면 서버의 기본 경로로 돌아간다.</li>
+<li>문자열의 인코딩과 해석은 구현마다 다르지만 보통 나열 순서대로 찾을 디렉터리나 폰트 서버를 뜻한다.</li>
+<li>서버는 폰트 정보를 캐시할 수 있고(파일이 바뀌었는지 다시 확인하지 않을 수도 있다), 경로가 바뀌면 현재 리소스 ID가 할당되어 있지 않은 폰트의 캐시 정보를 반드시 비운다. 새 폰트 파일을 넣고 바로 쓰고 싶을 때 경로를 다시 설정하는 이유다.</li>
+<li>이 요청에서 나는 오류의 의미는 구현마다 다르다.</li>
+</ul>
+<p>오류: <code>BadValue</code>.</p>
+
+<h4>XGetFontPath, XFreeFontPath</h4>
+<pre><code>char **XGetFontPath(Display *display, int *npaths_return);
+XFreeFontPath(char **list);</code></pre>
+<p>현재 검색 경로를 문자열 배열로 할당해 돌려준다. 문자열 내용은 구현마다 다르고 앱이 해석하라고 주는 것이 아니다. 다 쓰면 <code>XFreeFontPath</code>로 해제한다.</p>
+<pre><code>/* 기존 경로 끝에 디렉터리 하나 추가 (xset fp+ 와 같은 일) */
+int n;
+char **old = XGetFontPath(dpy, &amp;n);
+char **neu = malloc((n + 1) * sizeof(char *));
+for (int i = 0; i &lt; n; i++) neu[i] = old[i];
+neu[n] = "/usr/local/share/fonts/myfonts";
+XSetFontPath(dpy, neu, n + 1);
+free(neu);
+XFreeFontPath(old);</code></pre>
+
+<h3>9.5 서버 잡기 <small>(Grabbing the Server)</small></h3>
+<pre><code>XGrabServer(Display *display);
+XUngrabServer(Display *display);</code></pre>
+<p><code>XGrabServer</code>는 이 요청이 온 연결을 뺀 <b>다른 모든 연결</b>의 요청 처리와 연결 종료 처리를 멈춘다. <code>XUngrabServer</code>는 다시 시작한다. 클라이언트가 연결을 닫으면 자동으로 풀린다.</p>
+<p>쓰는 이유: 여러 요청을 다른 클라이언트의 방해 없이 원자적으로 처리해야 할 때다. 예를 들어 윈도 매니저가 창을 끌 때 XOR로 테두리 윤곽선을 그리는 동안 다른 앱이 화면을 바꾸면 윤곽선이 엉망이 되므로 그동안 서버를 잡는다.</p>
+<div class="tip">원문이 여러 번 강조하듯 서버 잡기는 <b>되도록 피해야</b> 하고, 꼭 필요한 만큼만 짧게 해야 한다. 잡는 동안 다른 모든 앱이 멈춘다. 잡은 채로 디버거에서 멈추거나 <code>XUngrabServer</code>를 빼먹으면 화면 전체가 얼어붙는다. 풀고 나서 <code>XFlush</code>나 <code>XSync</code>로 요청을 실제로 보내는 것도 잊지 않는다.</div>
+
+<h3>9.6 클라이언트 강제 종료 <small>(Killing Clients)</small></h3>
+<pre><code>XKillClient(Display *display, XID resource);</code></pre>
+<p>지정한 리소스를 만든 클라이언트의 연결을 강제로 끊고 리소스를 없앤다. <code>xkill</code> 같은 도구나 윈도 매니저의 "강제 종료"가 이 함수를 쓴다.</p>
+<ul>
+<li><code>resource</code>: 그 클라이언트와 연결된 아무 리소스(보통 창 ID), 또는 <code>AllTemporary</code>.</li>
+<li>유효한 리소스를 주면 그것을 만든 클라이언트를 종료시킨다.</li>
+<li>그 클라이언트가 이미 <code>RetainPermanent</code>나 <code>RetainTemporary</code> 모드로 끝나 리소스만 남아 있다면, 남은 리소스를 모두 없앤다.</li>
+<li><code>AllTemporary</code>를 주면 <code>RetainTemporary</code> 모드로 끝난 모든 클라이언트의 리소스를 없앤다(2.5절).</li>
+</ul>
+<p>디버깅 도움 기능 구현에 쓸 수 있다. 클라이언트가 close-down 모드를 <code>RetainTemporary</code>로 해 두면 비정상 종료해도 창이 남으므로, 개발자는 창 트리를 살펴본 뒤 윈도 매니저로 그 "좀비 창"을 없앨 수 있다.</p>
+<p>오류: <code>BadValue</code>.</p>
+
+<h3>9.7 화면 보호기 제어 <small>(Controlling the Screen Saver)</small></h3>
+<h4>XSetScreenSaver</h4>
+<pre><code>XSetScreenSaver(Display *display, int timeout, int interval,
+                int prefer_blanking, int allow_exposures);</code></pre>
+<ul>
+<li><code>timeout</code>: 입력이 없을 때 화면 보호기가 켜지기까지의 초. 0이면 화면 보호기를 끈다(이미 켜져 있는 것을 끄지는 않는다). −1이면 기본값으로 되돌린다. 다른 음수는 <code>BadValue</code>. 0이 아니면 화면 보호기를 켠 상태(enabled)로 한다.</li>
+<li><code>interval</code>: 화면 보호기 그림이 바뀌는 간격(초). 0이면 무작위 패턴 이동을 끈다. 서버의 방식이 주기적 변화를 지원하면 이 값은 주기에 대한 힌트이고, 0은 바꾸지 말라는 힌트다(컬러맵을 주기적으로 섞기, 아이콘 이미지를 움직이기, 루트 배경 타일을 무작위 원점으로 다시 깔기 등).</li>
+<li><code>prefer_blanking</code>: <code>DontPreferBlanking</code>, <code>PreferBlanking</code>, <code>DefaultBlanking</code>.</li>
+<li><code>allow_exposures</code>: <code>DontAllowExposures</code>, <code>AllowExposures</code>, <code>DefaultExposures</code>.</li>
+</ul>
+<p>켜진 상태에서 <code>timeout</code>초 동안 키보드·마우스 입력이 없으면 화면 보호기가 작동한다. 화면마다, 블랭킹을 선호하고 하드웨어가 지원하면 화면을 그냥 꺼멓게 한다. 그렇지 않고 노출이 허용되었거나 클라이언트에 <code>Expose</code>를 보내지 않고도 화면을 복원할 수 있으면, 루트 창 배경 타일을 <code>interval</code>초마다 무작위 원점으로 다시 깐다. 둘 다 아니면 화면 상태는 바뀌지 않고 화면 보호기도 작동하지 않는다. 다음 키보드·마우스 입력이나 <code>ScreenSaverReset</code> 모드의 <code>XForceScreenSaver</code> 호출 때 꺼지고 화면이 복원된다.</p>
+<p>오류: <code>BadValue</code>.</p>
+
+<h4>XForceScreenSaver, XActivateScreenSaver, XResetScreenSaver</h4>
+<pre><code>XForceScreenSaver(Display *display, int mode);
+XActivateScreenSaver(Display *display);
+XResetScreenSaver(Display *display);</code></pre>
+<ul>
+<li><code>XForceScreenSaver</code>: <code>mode</code>가 <code>ScreenSaverActive</code>이고 화면 보호기가 꺼져 있으면, timeout 0으로 꺼 두었더라도 작동시킨다. <code>ScreenSaverReset</code>이고 화면 보호기가 켜진 상태(enabled)면, 작동 중일 경우 끄고 타이머를 처음 상태로 되돌린다(입력이 들어온 것처럼). 오류: <code>BadValue</code>.</li>
+<li><code>XActivateScreenSaver</code>: 화면 보호기를 작동시킨다.</li>
+<li><code>XResetScreenSaver</code>: 화면 보호기를 리셋한다.</li>
+</ul>
+<div class="tip">동영상 플레이어처럼 입력 없이 오래 보는 앱이 화면 보호기를 막으려고 주기적으로 <code>XResetScreenSaver</code>를 부르는 방법이 예전부터 쓰였다. 요즘 데스크톱 환경은 별도의 화면 잠금 프로그램을 쓰므로 이것만으로는 부족할 수 있다.</div>
+
+<h4>XGetScreenSaver</h4>
+<pre><code>XGetScreenSaver(Display *display, int *timeout_return, int *interval_return,
+                int *prefer_blanking_return, int *allow_exposures_return);</code></pre>
+<p>현재 설정을 돌려준다. 값의 종류는 <code>XSetScreenSaver</code>와 같다.</p>
+<pre><code>/* 현재 설정을 보존한 채 timeout만 10분으로 */
+int t, i, pb, ae;
+XGetScreenSaver(dpy, &amp;t, &amp;i, &amp;pb, &amp;ae);
+XSetScreenSaver(dpy, 600, i, pb, ae);</code></pre>
+
+<h3>9.8 호스트 접근 제어 <small>(Controlling Host Access)</small></h3>
+<p>X에는 창 단위의 보호가 <b>없다</b>. 리소스 ID만 알면 누구든 그 리소스를 조작할 수 있다. 최소한의 보호로, 믿을 수 있는 컴퓨터에서 오는 연결만 허용한다. 이것은 혼자 쓰는 워크스테이션에서는 충분하지만 여러 사람이 함께 쓰는 시분할 시스템에서는 분명히 부족하다. 프로토콜에 제대로 된 연결 인증 장치가 있지만 표준 인증 서버가 없어서, 호스트 단위 접근 제어가 유일한 공통 방식으로 남았다(원문 기준. 실제로는 오늘날 MIT-MAGIC-COOKIE 같은 인증이 널리 쓰인다).</p>
+<p>처음에 연결이 허용되는 호스트는 보통:</p>
+<ul>
+<li>윈도 시스템이 돌아가는 호스트 자신.</li>
+<li>POSIX 시스템이면 <code>/etc/X?.hosts</code> 파일에 적힌 호스트(<code>?</code>는 디스플레이 번호). 줄마다 호스트 이름 하나이고, DECnet 노드는 인터넷 호스트와 구별하도록 <code>::</code>로 끝나야 한다.</li>
+</ul>
+<p>접근 제어가 켜져 있을 때 목록에 없는 호스트가 연결하려 하면 서버가 거부한다. 접근 목록을 바꾸려면 클라이언트가 서버와 <b>같은 호스트</b>에 있거나, 연결 설정 때 초기 인증에서 권한을 받았어야 한다. 서버는 이것 말고 다른 접근 제어 방식을 함께 쓰거나 대신 쓸 수도 있다(X Window System Protocol 참고).</p>
+
+<h4>XHostAddress 구조체</h4>
+<pre><code>typedef struct {
+    int family;      /* 예: FamilyInternet */
+    int length;      /* 주소 길이(바이트) */
+    char *address;   /* 주소가 있는 곳 */
+} XHostAddress;
+
+typedef struct {
+    int typelength;  /* type 문자열 길이(바이트) */
+    int valuelength; /* value 문자열 길이(바이트) */
+    char *type;      /* type 문자열 */
+    char *value;     /* value(주소) 문자열 */
+} XServerInterpretedAddress;</code></pre>
+<ul>
+<li><code>family</code>: <code>FamilyInternet</code>, <code>FamilyInternet6</code>, <code>FamilyServerInterpreted</code>, <code>FamilyDECnet</code>, <code>FamilyChaos</code>.</li>
+<li>TCP/IP 주소는 <b>네트워크 바이트 순서</b>로 넣는다. IPv4는 <code>FamilyInternet</code>에 길이 4, IPv6는 <code>FamilyInternet6</code>에 길이 16.</li>
+<li>DECnet은 서버가 바이트를 자동으로 바꾸지 않는다. Phase IV 주소는 2바이트로, 첫 바이트는 노드 번호의 하위 8비트, 둘째 바이트는 하위 2비트에 노드 번호의 상위 2비트, 상위 6비트에 area를 담는다.</li>
+<li><code>FamilyServerInterpreted</code>면 <code>length</code>는 무시되고 <code>address</code>가 <code>XServerInterpretedAddress</code>를 가리킨다. <code>type</code>과 <code>value</code>는 NUL로 끝나지 않을 수 있으므로 반드시 길이 멤버를 써서 읽는다.</li>
+</ul>
+
+<h4>호스트 추가·조회·삭제</h4>
+<pre><code>XAddHost(Display *display, XHostAddress *host);
+XAddHosts(Display *display, XHostAddress *hosts, int num_hosts);
+XHostAddress *XListHosts(Display *display, int *nhosts_return, Bool *state_return);
+XRemoveHost(Display *display, XHostAddress *host);
+XRemoveHosts(Display *display, XHostAddress *hosts, int num_hosts);</code></pre>
+<ul>
+<li><code>XAddHost</code>/<code>XAddHosts</code>: 호스트(들)를 그 디스플레이의 접근 목록에 넣는다. 서버가 요청한 클라이언트와 같은 호스트에 있어야 하고, 아니면 <code>BadAccess</code>. 오류: <code>BadAccess</code>, <code>BadValue</code>.</li>
+<li><code>XListHosts</code>: 현재 접근 목록과, 연결 설정 때 목록 사용이 켜져 있는지(<code>state_return</code>)를 돌려준다. 어떤 컴퓨터가 연결할 수 있는지 알 수 있다. 돌려받은 배열은 <code>XFree</code>로 해제한다.</li>
+<li><code>XRemoveHost</code>/<code>XRemoveHosts</code>: 목록에서 뺀다. 조건과 오류는 추가와 같다.</li>
+</ul>
+<div class="tip">자기 컴퓨터를 접근 목록에서 빼면 그 서버에 더 이상 연결할 수 없고, 서버를 리셋하기 전에는 되돌릴 수 없다. 명령행 도구 <code>xhost</code>가 이 함수들의 친숙한 앞단이다. <code>xhost +</code>(접근 제어 끄기)는 아무나 화면을 보고 키 입력을 가로챌 수 있게 하므로 위험하다.</div>
+<pre><code>/* 현재 허용 목록 출력 */
+#include &lt;arpa/inet.h&gt;
+int n; Bool on;
+XHostAddress *h = XListHosts(dpy, &amp;n, &amp;on);
+printf("접근 제어 %s, %d개\n", on ? "켜짐" : "꺼짐", n);
+for (int i = 0; i &lt; n; i++)
+    if (h[i].family == FamilyInternet &amp;&amp; h[i].length == 4) {
+        char buf[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, h[i].address, buf, sizeof buf);
+        printf("  %s\n", buf);
+    }
+if (h) XFree(h);</code></pre>
+
+<h4>접근 제어 켜기·끄기</h4>
+<p>이 함수들이 성공하려면 클라이언트가 X 서버와 같은 호스트에 있거나, 연결 설정 때 초기 인증에서 권한을 받았어야 한다.</p>
+<pre><code>XSetAccessControl(Display *display, int mode);
+XEnableAccessControl(Display *display);
+XDisableAccessControl(Display *display);</code></pre>
+<ul>
+<li><code>XSetAccessControl</code>: <code>mode</code>가 <code>EnableAccess</code>면 연결 설정 때마다 접근 목록을 쓰도록 켜고, <code>DisableAccess</code>면 끈다. 오류: <code>BadAccess</code>, <code>BadValue</code>.</li>
+<li><code>XEnableAccessControl</code>: 켠다. 오류: <code>BadAccess</code>.</li>
+<li><code>XDisableAccessControl</code>: 끈다(누구나 연결 가능). 오류: <code>BadAccess</code>.</li>
+</ul>
+</section><div class="pager"><a href="ch8.html">← 8장. 그래픽 함수 (Graphics Functions)</a><a href="./">차례</a><a href="ch10.html">10장. 이벤트 (Events) →</a></div>
+<a class="top" href="#">↑ 위로</a>
+</html>

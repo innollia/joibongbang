@@ -1,0 +1,446 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>11장. 이벤트 처리 함수 (Event Handling Functions) — Xlib 한국어</title>
+<style>
+body{font:16px/1.75 system-ui,"Malgun Gothic",sans-serif;max-width:860px;margin:40px auto;padding:0 16px;background:#111;color:#e8e8e8}
+a{color:#7cf} h1{line-height:1.3} h2{margin-top:3em;border-bottom:1px solid #444;padding-bottom:.3em} h2 small{color:#999;font-weight:normal;font-size:.6em}
+h3{margin-top:2em;color:#fd8} h4{color:#9df}
+code{font-family:ui-monospace,Consolas,monospace;font-size:.92em;background:#222;padding:1px 4px;border-radius:3px}
+pre{background:#1b1d22;border:1px solid #333;padding:12px;overflow-x:auto;border-radius:6px;line-height:1.45} pre code{background:none;padding:0}
+.tip{background:#1d2a1d;border-left:4px solid #6c6;padding:8px 12px;margin:1em 0;border-radius:4px}
+table{border-collapse:collapse;margin:1em 0;font-size:.92em;display:block;overflow-x:auto} td,th{border:1px solid #444;padding:4px 8px;vertical-align:top} th{background:#222}
+nav ol{columns:2} .top{position:fixed;right:16px;bottom:16px;background:#333;padding:6px 10px;border-radius:6px;text-decoration:none}
+.pager{display:flex;justify-content:space-between;gap:12px;margin:2em 0;padding-top:1em;border-top:1px solid #444} .pager a{text-decoration:none}
+</style>
+<p><a href="../../">← 조이봉방</a> · <a href="./">Xlib 번역 차례</a></p><div class="pager"><a href="ch10.html">← 10장. 이벤트 (Events)</a><a href="./">차례</a><a href="ch12.html">12장. 입력 장치 함수 (Input Device Functions) →</a></div><section id="ch11"><h2 style="margin-top:1em">11장. 이벤트 처리 함수 <small>(Event Handling Functions)</small></h2>
+<p>이 장은 이벤트를 고르고(select), 출력 버퍼와 이벤트 큐를 다루고, 큐에서 이벤트를 꺼내고, 다른 프로그램에 이벤트를 보내고, 프로토콜 오류를 처리하는 Xlib 함수를 다룬다.</p>
+<div class="tip">일부 툴킷(Xt, GTK, Qt 등)은 자체 이벤트 처리 함수를 쓰므로 이 장의 Xlib 함수와 섞어 쓰면 안 될 수 있다. 툴킷 문서를 따른다.</div>
+<p>대부분의 X 앱은 그냥 하나의 이벤트 루프다. 이벤트를 기다리고, 무엇을 할지 정하고, 화면을 바꾸는 코드를 조금 실행하고, 다시 다음 이벤트를 기다린다. 먼저 전체 그림을 잡기 위해 가장 기본적인 프로그램을 보자.</p>
+<pre><code>/* cc ev.c -lX11 */
+#include &lt;X11/Xlib.h&gt;
+#include &lt;X11/Xutil.h&gt;
+#include &lt;stdio.h&gt;
+
+int main(void) {
+    Display *dpy = XOpenDisplay(NULL);
+    if (!dpy) { fprintf(stderr, "cannot open %s\n", XDisplayName(NULL)); return 1; }
+    int scr = DefaultScreen(dpy);
+    Window win = XCreateSimpleWindow(dpy, RootWindow(dpy, scr), 0, 0, 300, 200, 1,
+                                     BlackPixel(dpy, scr), WhitePixel(dpy, scr));
+    XSelectInput(dpy, win, ExposureMask | KeyPressMask | ButtonPressMask
+                           | StructureNotifyMask);
+    Atom wm_delete = XInternAtom(dpy, "WM_DELETE_WINDOW", False);
+    XSetWMProtocols(dpy, win, &amp;wm_delete, 1);
+    XMapWindow(dpy, win);
+    GC gc = DefaultGC(dpy, scr);
+
+    for (int running = 1; running; ) {
+        XEvent ev;
+        XNextEvent(dpy, &amp;ev);              /* 큐가 비면 flush 후 대기 */
+        switch (ev.type) {
+        case Expose:
+            if (ev.xexpose.count == 0)
+                XDrawString(dpy, win, gc, 20, 40, "press q", 7);
+            break;
+        case KeyPress: {
+            char buf[8]; KeySym ks;
+            int n = XLookupString(&amp;ev.xkey, buf, sizeof buf, &amp;ks, NULL);
+            if (n == 1 &amp;&amp; buf[0] == 'q') running = 0;
+            break;
+        }
+        case ButtonPress:
+            printf("button %u (%d,%d)\n", ev.xbutton.button, ev.xbutton.x, ev.xbutton.y);
+            break;
+        case ClientMessage:
+            if ((Atom)ev.xclient.data.l[0] == wm_delete) running = 0;
+            break;
+        case MappingNotify:
+            XRefreshKeyboardMapping(&amp;ev.xmapping);
+            break;
+        }
+    }
+    XCloseDisplay(dpy);
+    return 0;
+}</code></pre>
+
+<h3>11.1 이벤트 고르기</h3>
+<p>받을 이벤트를 정하는 방법은 두 가지다. <code>XCreateWindow</code>나 <code>XChangeWindowAttributes</code>를 부를 때 <code>XSetWindowAttributes</code>의 <code>event_mask</code> 멤버를 설정하는 방법, 그리고 <code>XSelectInput</code>을 쓰는 방법이다.</p>
+<pre><code>XSelectInput(Display *display, Window w, long event_mask);</code></pre>
+<p>창 <code>w</code>에 대해 <code>event_mask</code>에 해당하는 이벤트를 보고해 달라고 서버에 요청한다.</p>
+<ul>
+<li><code>w</code>: 관심 있는 창.</li>
+<li><code>event_mask</code>: 10.3절의 마스크들을 OR한 값.</li>
+</ul>
+<p>처음에는 아무 이벤트도 보고되지 않는다. 이벤트는 창 기준으로 보고된다. 어떤 창이 장치 이벤트에 관심이 없으면, do_not_propagate 마스크가 막지 않는 한 그 이벤트는 보통 관심 있는 가장 가까운 조상으로 전파된다.</p>
+<p>이벤트 마스크 설정은 <b>같은 클라이언트의 같은 창</b>에 대한 이전 설정을 덮어쓴다(더하는 것이 아니다). 다른 클라이언트의 설정에는 영향이 없다. 여러 클라이언트가 같은 창의 같은 이벤트를 고를 수 있고, 서버는 이벤트를 관심 있는 모든 클라이언트에게 보낸다. 다만 다음은 한 번에 한 클라이언트만 고를 수 있다.</p>
+<ul>
+<li><code>SubstructureRedirectMask</code>(<code>CirculateRequest</code>, <code>ConfigureRequest</code>, <code>MapRequest</code>)</li>
+<li><code>ResizeRedirectMask</code>(<code>ResizeRequest</code>)</li>
+<li><code>ButtonPressMask</code>(<code>ButtonPress</code>)</li>
+</ul>
+<p>이미 다른 클라이언트가 고른 것을 고르려 하면 <code>BadAccess</code> 오류가 난다(11.8절 오류 표). <code>XSelectInput</code>은 <code>BadWindow</code> 오류도 낼 수 있다.</p>
+<div class="tip">함정: 마스크를 나눠서 <code>XSelectInput(dpy, w, KeyPressMask); XSelectInput(dpy, w, ExposureMask);</code>처럼 두 번 부르면 마지막 것만 남는다. 필요한 마스크를 한 번에 OR해서 넘기거나, 나중에 추가하려면 현재 마스크(<code>XGetWindowAttributes</code>의 <code>your_event_mask</code>)에 OR해서 다시 설정한다.</div>
+
+<h3>11.2 출력 버퍼 다루기</h3>
+<p>Xlib은 요청을 부를 때마다 바로 네트워크로 보내지 않고 <b>출력 버퍼</b>에 모았다가 한꺼번에 보낸다. 요청마다 시스템 호출을 하면 느리기 때문이다. 이 절의 함수들은 블록(대기)해야 하거나 이벤트를 돌려주지 못할 때 출력 버퍼를 비운다(flush: 아직 안 보낸 요청을 모두 서버로 보냄).</p>
+<pre><code>XFlush(Display *display);</code></pre>
+<p>출력 버퍼를 비운다. 대부분의 앱은 직접 부를 필요가 없다. <code>XPending</code>, <code>XNextEvent</code>, <code>XWindowEvent</code> 등이 필요할 때 자동으로 비우기 때문이다. 서버가 만든 이벤트는 라이브러리의 이벤트 큐에 들어갈 수 있다.</p>
+<div class="tip">직접 <code>XFlush</code>가 필요한 대표 경우: 이벤트를 기다리지 않는 루프(게임 루프, 애니메이션)에서 그리기 요청을 보낸 뒤 sleep하는 경우. flush하지 않으면 그림이 버퍼에 머물러 화면에 안 나온다.</div>
+<pre><code>XSync(Display *display, Bool discard);</code></pre>
+<p>출력 버퍼를 비운 뒤, 서버가 모든 요청을 받고 <b>처리할 때까지</b> 기다린다(왕복 한 번). 그동안 생긴 오류는 모두 오류 처리기로 처리된다. Xlib이 받은 프로토콜 오류마다 앱의 오류 처리 함수를 부른다(11.8.2절). 서버가 만든 이벤트는 큐에 들어간다.</p>
+<ul>
+<li><code>discard</code>가 <code>False</code>: 큐의 이벤트를 그대로 둔다.</li>
+<li><code>discard</code>가 <code>True</code>: <code>XSync</code>를 부르기 전부터 있던 것을 포함해 큐의 모든 이벤트를 버린다.</li>
+</ul>
+<p>앱이 <code>XSync</code>를 부를 일은 드물다. 주로 "이 요청이 오류를 냈는지 지금 확인하고 싶을 때"(아래 오류 처리 예)나 디버깅에 쓴다.</p>
+<div class="tip"><code>XSync</code>는 서버와 왕복하므로 원격 연결에서 비싸다. 루프 안에서 매번 부르면 크게 느려진다. 또 <code>XSync(dpy, True)</code>는 <code>Expose</code> 같은 중요한 이벤트까지 버리므로 조심한다.</div>
+
+<h3>11.3 이벤트 큐 관리</h3>
+<p>Xlib은 이벤트 큐를 갖고 있다. 그런데 운영체제도 네트워크 연결에 아직 큐로 읽어 들이지 않은 데이터를 버퍼링하고 있을 수 있다. 그래서 "이벤트가 몇 개 있나?"라는 질문에도 "Xlib 큐만 볼지, 소켓도 읽어 볼지, 그 전에 flush할지"의 선택이 있다.</p>
+<pre><code>int XEventsQueued(Display *display, int mode);</code></pre>
+<p>큐에 있는 이벤트 수를 돌려준다. <code>mode</code>에 따라 동작이 다르다.</p>
+<table>
+<tr><th>mode</th><th>큐에 이벤트가 있을 때</th><th>큐가 비었을 때</th></tr>
+<tr><td><code>QueuedAlready</code></td><td>그 개수</td><td>0. 시스템 호출을 절대 하지 않음(<code>XQLength</code>와 같음)</td></tr>
+<tr><td><code>QueuedAfterFlush</code></td><td>그 개수</td><td>출력 버퍼를 비우고, 연결에서 이벤트를 더 읽어 보고, 읽은 수를 돌려줌(<code>XPending</code>과 같음)</td></tr>
+<tr><td><code>QueuedAfterReading</code></td><td>그 개수</td><td>flush 없이 연결에서 더 읽어 보고, 읽은 수를 돌려줌</td></tr>
+</table>
+<p>큐에 이벤트가 이미 있으면 어떤 mode든 입출력 없이 바로 돌아온다. 이 함수들은 블록하지 않는다(읽을 데이터가 없으면 0).</p>
+<pre><code>int XPending(Display *display);</code></pre>
+<p>서버에서 받았지만 아직 큐에서 꺼내지 않은 이벤트 수를 돌려준다. <code>XEventsQueued(display, QueuedAfterFlush)</code>와 같다. "블록하지 않고 이벤트가 있는지 확인"할 때 가장 흔히 쓴다.</p>
+<p>게임처럼 이벤트가 없어도 계속 돌아야 하는 루프의 기본형:</p>
+<pre><code>while (running) {
+    while (XPending(dpy) &gt; 0) {         /* 쌓인 이벤트를 모두 처리 */
+        XEvent ev;
+        XNextEvent(dpy, &amp;ev);            /* 이벤트가 있으니 블록하지 않음 */
+        handle(&amp;ev);
+    }
+    update_game();
+    draw_frame();                        /* XFillRectangle 등 */
+    XFlush(dpy);                         /* 그린 것을 서버로 */
+    usleep(16000);                       /* 약 60fps */
+}</code></pre>
+<div class="tip">더 나은 방법: <code>ConnectionNumber(dpy)</code>로 소켓 파일 디스크립터를 얻어 <code>select()</code>/<code>poll()</code>로 타임아웃과 함께 기다리면 CPU를 덜 쓴다. 이때 주의할 점은, Xlib이 이미 큐에 읽어 둔 이벤트는 소켓에 남아 있지 않으므로 <code>select()</code> 전에 반드시 <code>XPending</code>으로 큐를 먼저 비워야 한다는 것이다. 안 그러면 이벤트가 큐에 있는데도 <code>select()</code>에서 멈춘다.</div>
+
+<h3>11.4 이벤트 큐 조작</h3>
+<p>Xlib은 큐에서 이벤트를 꺼내는 여러 함수를 준다. 순서대로 꺼내기, 꺼내지 않고 엿보기, 마스크나 직접 만든 조건(predicate) 함수와 맞는 것만 골라 꺼내기가 있다. 먼저 전체를 비교해 두자.</p>
+<table>
+<tr><th>함수</th><th>고르는 기준</th><th>큐에서 제거</th><th>없으면</th></tr>
+<tr><td><code>XNextEvent</code></td><td>맨 앞 이벤트</td><td>예</td><td>flush 후 블록</td></tr>
+<tr><td><code>XPeekEvent</code></td><td>맨 앞 이벤트</td><td>아니오</td><td>flush 후 블록</td></tr>
+<tr><td><code>XIfEvent</code></td><td>predicate 함수</td><td>예</td><td>블록(블록할 때 flush)</td></tr>
+<tr><td><code>XCheckIfEvent</code></td><td>predicate 함수</td><td>예</td><td><code>False</code> 반환(flush됨)</td></tr>
+<tr><td><code>XPeekIfEvent</code></td><td>predicate 함수</td><td>아니오</td><td>블록(블록할 때 flush)</td></tr>
+<tr><td><code>XWindowEvent</code></td><td>창 + 마스크</td><td>예</td><td>flush 후 블록</td></tr>
+<tr><td><code>XCheckWindowEvent</code></td><td>창 + 마스크</td><td>예</td><td><code>False</code> 반환(flush됨)</td></tr>
+<tr><td><code>XMaskEvent</code></td><td>마스크</td><td>예</td><td>flush 후 블록</td></tr>
+<tr><td><code>XCheckMaskEvent</code></td><td>마스크</td><td>예</td><td><code>False</code> 반환(flush됨)</td></tr>
+<tr><td><code>XCheckTypedEvent</code></td><td>이벤트 타입</td><td>예</td><td><code>False</code> 반환(flush됨)</td></tr>
+<tr><td><code>XCheckTypedWindowEvent</code></td><td>타입 + 창</td><td>예</td><td><code>False</code> 반환(flush됨)</td></tr>
+</table>
+<p>이름에 <code>Check</code>가 붙은 함수는 블록하지 않고 <code>Bool</code>을 돌려준다. 골라 꺼내는 함수들은 맞지 않는 다른 이벤트를 버리지 않고 큐에 그대로 둔다. 그래서 "순서를 건너뛰어" 원하는 이벤트를 먼저 처리할 수 있다.</p>
+
+<h4>다음 이벤트 꺼내기</h4>
+<pre><code>XNextEvent(Display *display, XEvent *event_return);</code></pre>
+<p>큐의 첫 이벤트를 <code>event_return</code>에 복사하고 큐에서 지운다. 큐가 비어 있으면 출력 버퍼를 비우고 이벤트가 올 때까지 기다린다. 이벤트 루프의 중심 함수다.</p>
+<pre><code>XPeekEvent(Display *display, XEvent *event_return);</code></pre>
+<p>큐의 첫 이벤트를 복사해 주되 지우지 않는다. 큐가 비면 flush 후 기다린다. "다음 이벤트가 무엇인지 보고 지금 처리를 결정"할 때 쓴다.</p>
+<pre><code>/* 키 자동 반복(auto-repeat) 걸러내기: Release 바로 뒤에 같은 시각의 Press가 오면 반복 */
+case KeyRelease:
+    if (XEventsQueued(dpy, QueuedAfterReading)) {
+        XEvent nx;
+        XPeekEvent(dpy, &amp;nx);
+        if (nx.type == KeyPress &amp;&amp; nx.xkey.time == ev.xkey.time
+            &amp;&amp; nx.xkey.keycode == ev.xkey.keycode) {
+            XNextEvent(dpy, &amp;nx);      /* 반복으로 생긴 Press도 버림 */
+            break;
+        }
+    }
+    key_up(ev.xkey.keycode);
+    break;</code></pre>
+<p>(<code>XPeekEvent</code>는 큐가 비면 블록하므로, 먼저 <code>XEventsQueued</code>로 이벤트가 있는지 확인했다.)</p>
+
+<h4>predicate 함수로 고르기</h4>
+<p>세 함수(<code>XIfEvent</code>, <code>XCheckIfEvent</code>, <code>XPeekIfEvent</code>)는 이벤트가 원하는 것인지 판정하는 함수(predicate)를 받는다. 형태는 다음과 같다.</p>
+<pre><code>Bool predicate(Display *display, XEvent *event, XPointer arg);</code></pre>
+<ul>
+<li><code>event</code>: 검사할 이벤트.</li>
+<li><code>arg</code>: <code>XIfEvent</code> 등에 넘긴 사용자 인자 그대로(조건값을 넘기는 용도).</li>
+</ul>
+<p>predicate는 큐의 이벤트마다 한 번씩, 맞는 것을 찾을 때까지 불린다. 맞으면 <code>True</code>, 아니면 <code>False</code>를 돌려준다.</p>
+<div class="tip">중요한 제약: predicate 안에서 <b>Xlib 함수를 부르면 안 된다</b>. predicate가 직접이든 간접이든 이벤트 큐 상태를 바꾸면 결과는 정의되지 않는다. Xlib이 스레드용으로 초기화되어 있으면 predicate는 디스플레이가 잠긴 채 불리므로, 디스플레이를 잠그는 Xlib 함수를 부르면(먼저 <code>XLockDisplay</code>를 부르지 않은 한) 결과가 정의되지 않는다. 이벤트 필드만 보고 판단한다.</div>
+<pre><code>XIfEvent(Display *display, XEvent *event_return, Bool (*predicate)(), XPointer arg);</code></pre>
+<p>predicate가 <code>True</code>를 돌려주는 이벤트가 나올 때까지 기다린다. 기다리게 되면 flush한다. 맞는 이벤트를 큐에서 지우고 <code>event_return</code>에 복사한다.</p>
+<pre><code>Bool XCheckIfEvent(Display *display, XEvent *event_return, Bool (*predicate)(), XPointer arg);</code></pre>
+<p>블록하지 않는 판. 맞는 것이 있으면 복사·제거하고 <code>True</code>. 없으면 <code>False</code>를 돌려주며, 그때 출력 버퍼는 비워진 상태다. 앞서 쌓인 이벤트는 버리지 않는다.</p>
+<pre><code>XPeekIfEvent(Display *display, XEvent *event_return, Bool (*predicate)(), XPointer arg);</code></pre>
+<p>맞는 이벤트가 나올 때까지 기다려 복사하되, 큐에서 지우지 않는다. 기다리면 flush한다.</p>
+<p>대표적인 사용 예: 창을 매핑한 뒤 실제로 매핑될 때까지 기다리기.</p>
+<pre><code>static Bool is_map_notify(Display *d, XEvent *e, XPointer arg) {
+    return e-&gt;type == MapNotify &amp;&amp; e-&gt;xmap.window == *(Window *)arg;
+}
+...
+XSelectInput(dpy, win, StructureNotifyMask | ExposureMask);
+XMapWindow(dpy, win);
+XEvent ev;
+XIfEvent(dpy, &amp;ev, is_map_notify, (XPointer)&amp;win);   /* MapNotify가 올 때까지 */
+/* 이제 XSetInputFocus 등 매핑된 창이 필요한 요청을 보낼 수 있다 */</code></pre>
+<p>이렇게 하면 기다리는 동안 들어온 <code>Expose</code> 같은 다른 이벤트는 큐에 그대로 남아 나중에 루프에서 처리된다.</p>
+
+<h4>창이나 이벤트 마스크로 고르기</h4>
+<p>이 함수들은 창이나 이벤트 종류로 골라서, 순서를 바꿔 처리할 수 있게 해 준다.</p>
+<pre><code>XWindowEvent(Display *display, Window w, long event_mask, XEvent *event_return);</code></pre>
+<p>창 <code>w</code>와 <code>event_mask</code> 모두에 맞는 이벤트를 큐에서 찾아 지우고 복사한다. 다른 이벤트는 그대로 둔다. 없으면 flush 후 기다린다.</p>
+<pre><code>Bool XCheckWindowEvent(Display *display, Window w, long event_mask, XEvent *event_return);</code></pre>
+<p>블록하지 않는 판. 큐를 먼저 찾고, 그다음 서버 연결에서 읽을 수 있는 이벤트까지 찾는다. 있으면 <code>True</code>, 없으면 <code>False</code>(출력 버퍼는 비워짐).</p>
+<pre><code>XMaskEvent(Display *display, long event_mask, XEvent *event_return);</code></pre>
+<p>창과 상관없이 마스크에 맞는 이벤트를 찾아 지우고 복사한다. 없으면 flush 후 기다린다.</p>
+<pre><code>Bool XCheckMaskEvent(Display *display, long event_mask, XEvent *event_return);</code></pre>
+<p>블록하지 않는 판. 큐와 연결을 찾아 있으면 <code>True</code>, 없으면 <code>False</code>.</p>
+<pre><code>Bool XCheckTypedEvent(Display *display, int event_type, XEvent *event_return);</code></pre>
+<p>마스크가 아니라 <b>이벤트 타입</b>(<code>Expose</code>, <code>MotionNotify</code> 등)으로 찾는다. 큐와 연결을 찾아 첫 번째로 맞는 것을 꺼내고 <code>True</code>, 없으면 <code>False</code>.</p>
+<pre><code>Bool XCheckTypedWindowEvent(Display *display, Window w, int event_type, XEvent *event_return);</code></pre>
+<p>타입과 창이 모두 맞는 첫 이벤트를 꺼낸다. 없으면 <code>False</code>.</p>
+<div class="tip">마스크 함수와 타입 함수의 차이: 마스크로는 고를 수 없는 이벤트가 있다. <code>ClientMessage</code>, <code>SelectionNotify</code> 같은 마스크 없는 이벤트는 <code>XMaskEvent</code>/<code>XWindowEvent</code>로 꺼낼 수 없으므로 <code>XCheckTypedEvent</code>나 predicate 함수를 쓴다. 또 <code>MotionNotify</code>처럼 여러 마스크가 한 타입에 대응하는 경우 타입 함수가 더 직관적이다.</div>
+<p>실전 예 1: <code>Expose</code> 압축. 창 하나에 <code>Expose</code>가 여러 개 쌓였을 때 한 번만 다시 그린다.</p>
+<pre><code>case Expose: {
+    XEvent extra;
+    /* 같은 창의 남은 Expose를 모두 걷어 낸다 */
+    while (XCheckTypedWindowEvent(dpy, ev.xexpose.window, Expose, &amp;extra))
+        ;
+    redraw_all(ev.xexpose.window);
+    break;
+}</code></pre>
+<p>실전 예 2: 이동 이벤트 압축. 처리가 느릴 때 가장 최근 위치만 쓴다.</p>
+<pre><code>case MotionNotify: {
+    XEvent latest = ev;
+    while (XCheckTypedWindowEvent(dpy, ev.xmotion.window, MotionNotify, &amp;latest))
+        ;                                /* 마지막 것만 남긴다 */
+    drag_to(latest.xmotion.x, latest.xmotion.y);
+    break;
+}</code></pre>
+<p>실전 예 3: Esc 키로 긴 작업 중단 확인(블록하지 않음).</p>
+<pre><code>for (int i = 0; i &lt; big_job_steps; i++) {
+    do_step(i);
+    XEvent k;
+    if (XCheckWindowEvent(dpy, win, KeyPressMask, &amp;k) &amp;&amp;
+        XLookupKeysym(&amp;k.xkey, 0) == XK_Escape)   /* XK_Escape: &lt;X11/keysym.h&gt; */
+        break;
+}</code></pre>
+
+<h3>11.5 이벤트를 큐에 되돌려 놓기</h3>
+<pre><code>XPutBackEvent(Display *display, XEvent *event);</code></pre>
+<p>이벤트를 복사해서 큐의 <b>맨 앞</b>에 다시 넣는다. 이벤트를 읽었다가 "이건 나중에 처리하자"고 마음을 바꿨을 때 쓴다. 연속해서 몇 번이든 부를 수 있다. 맨 앞에 넣으므로 다음 <code>XNextEvent</code>가 바로 이 이벤트를 돌려준다. 여러 개를 되돌리면 마지막에 되돌린 것이 먼저 나온다.</p>
+<pre><code>XEvent ev;
+XNextEvent(dpy, &amp;ev);
+if (ev.type == KeyPress &amp;&amp; !ready_for_keys) {
+    XPutBackEvent(dpy, &amp;ev);   /* 다음 XNextEvent에서 다시 나온다 */
+}</code></pre>
+<div class="tip">되돌린 이벤트를 곧바로 다시 꺼내 다시 되돌리는 루프를 만들면 무한 반복에 빠진다. 되돌린 뒤에는 다른 일을 하고 나서 다시 꺼내야 한다.</div>
+
+<h3>11.6 다른 프로그램에 이벤트 보내기</h3>
+<pre><code>Status XSendEvent(Display *display, Window w, Bool propagate, long event_mask, XEvent *event_send);</code></pre>
+<p>지정한 창으로 이벤트를 보낸다. 셀렉션 처리에서 자주 쓴다. 예를 들어 셀렉션 소유자는 데이터를 변환해 프로퍼티에 저장한 뒤 <code>XSendEvent</code>로 요청자에게 <code>SelectionNotify</code>를 보내야 한다.</p>
+<ul>
+<li><code>w</code>: 받을 창. 특수값 <code>PointerWindow</code>(포인터가 들어 있는 창), <code>InputFocus</code>도 쓸 수 있다.</li>
+<li><code>propagate</code>: 받을 클라이언트가 없을 때 조상 창으로 전파할지.</li>
+<li><code>event_mask</code>: 받을 클라이언트를 고르는 마스크(10.3절).</li>
+<li><code>event_send</code>: 보낼 이벤트.</li>
+</ul>
+<p>이 함수는 목적지 창을 정하고, 어느 클라이언트가 받을지 정하고, 걸려 있는 능동 그랩은 <b>무시한다</b>.</p>
+<h4>목적지 창 정하기</h4>
+<ul>
+<li><code>w</code>가 <code>PointerWindow</code>: 포인터가 들어 있는 창.</li>
+<li><code>w</code>가 <code>InputFocus</code>: 포커스 창이 포인터를 담고 있으면 포인터가 들어 있는 창, 아니면 포커스 창.</li>
+</ul>
+<h4>받을 클라이언트 정하기</h4>
+<ol>
+<li><code>event_mask</code>가 비어 있으면(0): 목적지 창을 <b>만든 클라이언트</b>에게 보낸다. 그 클라이언트가 이미 없으면 아무에게도 안 간다.</li>
+<li><code>propagate</code>가 <code>False</code>: 목적지 창에서 <code>event_mask</code>의 이벤트 종류 중 하나라도 고른 모든 클라이언트에게 보낸다.</li>
+<li><code>propagate</code>가 <code>True</code>이고 목적지 창에서 그 종류를 고른 클라이언트가 없으면: 목적지를 "그 종류를 고른 클라이언트가 있고, 중간 창의 do-not-propagate-mask가 그 종류를 막지 않는" 가장 가까운 조상으로 바꾼다. 그런 창이 없거나, 처음에 <code>InputFocus</code>를 지정했는데 그 창이 포커스 창의 조상이면 아무에게도 보내지 않는다. 아니면 최종 목적지에서 그 종류를 고른 모든 클라이언트에게 보낸다.</li>
+</ol>
+<p>이벤트는 코어 이벤트이거나 확장이 정의한 이벤트여야 한다(아니면 <code>BadValue</code>). 서버가 바이트 순서를 바꿔(byte-swap) 줄 수 있어야 하기 때문이다. 그 밖에 서버는 내용을 고치거나 검사하지 않는다. 다만 전달하는 이벤트의 <code>send_event</code>를 강제로 <code>True</code>로 바꾸고 <code>serial</code>을 올바르게 채운다. 그래서 이 두 필드와 <code>display</code> 필드는 <code>XSendEvent</code>가 무시한다.</p>
+<p>반환값: 와이어 프로토콜 형식으로의 변환에 실패하면 0, 아니면 0이 아닌 값. <code>BadValue</code>, <code>BadWindow</code> 오류가 날 수 있다.</p>
+<div class="tip">반환값이 0이 아니라고 해서 상대가 받았다는 뜻은 아니다. 변환이 됐다는 뜻일 뿐이다. 실제 전달 여부는 알 수 없다. 또 요청은 출력 버퍼에 쌓이므로 바로 가게 하려면 <code>XFlush</code>를 부른다.</div>
+<p>예 1: 다른 스레드나 타이머에서 자기 이벤트 루프를 깨우기(자기 창에 <code>ClientMessage</code> 보내기). <code>event_mask</code>를 0으로 주면 창을 만든 클라이언트(자기 자신)에게 간다.</p>
+<pre><code>Atom wake = XInternAtom(dpy, "MY_APP_WAKEUP", False);
+XEvent e;
+memset(&amp;e, 0, sizeof e);
+e.xclient.type         = ClientMessage;
+e.xclient.window       = win;
+e.xclient.message_type = wake;
+e.xclient.format       = 32;
+e.xclient.data.l[0]    = 42;          /* 원하는 값 */
+XSendEvent(dpy, win, False, 0, &amp;e);
+XFlush(dpy);</code></pre>
+<p>(여러 스레드에서 같은 <code>Display</code>를 쓰려면 프로그램 시작 때 <code>XInitThreads</code>를 불러야 한다. 이 장의 범위 밖이다.)</p>
+<p>예 2: 창 관리자에게 요청 보내기(EWMH 규약). 루트 창으로 보내고, 창 관리자가 고른 마스크를 지정한다.</p>
+<pre><code>/* 창을 전체 화면으로 바꿔 달라고 요청 */
+XEvent e;
+memset(&amp;e, 0, sizeof e);
+e.xclient.type         = ClientMessage;
+e.xclient.window       = win;
+e.xclient.message_type = XInternAtom(dpy, "_NET_WM_STATE", False);
+e.xclient.format       = 32;
+e.xclient.data.l[0]    = 1;   /* _NET_WM_STATE_ADD */
+e.xclient.data.l[1]    = XInternAtom(dpy, "_NET_WM_STATE_FULLSCREEN", False);
+XSendEvent(dpy, DefaultRootWindow(dpy), False,
+           SubstructureRedirectMask | SubstructureNotifyMask, &amp;e);</code></pre>
+<div class="tip">받는 쪽에서는 <code>send_event</code>가 <code>True</code>인지 보고 합성 이벤트를 구분할 수 있다. 보안상 일부 프로그램(예: 터미널)은 <code>XSendEvent</code>로 온 가짜 <code>KeyPress</code>를 무시한다. 그래서 <code>XSendEvent</code>로 다른 앱에 키 입력을 흉내 내는 방법은 잘 통하지 않는다.</div>
+
+<h3>11.7 포인터 이동 기록 얻기</h3>
+<p>어떤 X 서버는 이벤트로 알려 주는 것보다 더 촘촘한 포인터 이동 기록을 가진다. 포인터 하드웨어 인터럽트마다 위치를 버퍼에 저장해 두는데, 이것을 모션 히스토리 버퍼라 한다. 그림 그리기 프로그램처럼 포인터가 지나간 길을 정확히 알아야 하는 앱 몇몇이 쓴다. 대부분의 앱에는 지나치게 많은 정보다. (자주 쓰지 않아 요약만)</p>
+<pre><code>unsigned long XDisplayMotionBufferSize(Display *display);</code></pre>
+<p>모션 버퍼가 담을 수 있는 대략의 최대 항목 수를 돌려준다.</p>
+<pre><code>XTimeCoord *XGetMotionEvents(Display *display, Window w, Time start, Time stop, int *nevents_return);
+
+typedef struct {
+	Time time;
+	short x, y;
+} XTimeCoord;</code></pre>
+<p><code>start</code>~<code>stop</code> 시각(양 끝 포함) 사이에 있고, 좌표가 창 <code>w</code>(테두리 포함, 현재 위치 기준) 안에 드는 모든 기록을 돌려준다. 시각에는 타임스탬프나 <code>CurrentTime</code>을 줄 수 있다. 개수는 <code>nevents_return</code>에 들어간다. 서버가 모션 히스토리를 지원하지 않거나, start가 stop보다 늦거나, start가 미래면 아무것도 돌려주지 않고 <code>NULL</code>을 돌려준다. stop이 미래면 <code>CurrentTime</code>과 같다. <code>time</code>은 밀리초, <code>x</code>, <code>y</code>는 창 <code>w</code> 기준 좌표다. 결과는 <code>XFree</code>로 해제한다. <code>BadWindow</code> 오류가 날 수 있다.</p>
+<pre><code>int n;
+XTimeCoord *tc = XGetMotionEvents(dpy, win, last_time, ev.xmotion.time, &amp;n);
+if (tc) {
+    for (int i = 0; i &lt; n; i++) add_point(tc[i].x, tc[i].y);
+    XFree(tc);
+}
+last_time = ev.xmotion.time;</code></pre>
+
+<h3>11.8 프로토콜 오류 처리</h3>
+<p>Xlib은 요청을 버퍼에 모아 비동기로 보낸다. 그래서 오류도 <b>나중에</b> 도착한다. 예를 들어 잘못된 창 ID로 <code>XMoveWindow</code>를 불러도 그 함수는 그냥 돌아오고, 몇 줄 뒤 Xlib이 서버에서 오류 메시지를 읽을 때 오류 처리기가 불린다. 이 절은 이 비동기성을 다루는 방법(동기 모드)과 오류 처리기를 바꾸는 방법을 다룬다.</p>
+
+<h4>동기 모드 켜고 끄기</h4>
+<p>디버깅할 때는 Xlib이 동기적으로 동작해 오류가 생긴 바로 그 자리에서 보고되게 하면 편하다. 대신 그래픽이 30배 이상 느려질 수 있다. POSIX 시스템에는 전역 변수 <code>_Xdebug</code>도 있는데, 디버거에서 프로그램을 시작하기 전에 0이 아닌 값으로 설정하면 동기 동작을 강제한다.</p>
+<p>프로토콜 요청을 만드는 모든 Xlib 함수는 일을 마친 뒤 "after function"이라는 함수를 부른다. 이것을 정하는 함수가 <code>XSetAfterFunction</code>이다.</p>
+<pre><code>int (*XSetAfterFunction(Display *display, int (*procedure)()))();</code></pre>
+<p><code>procedure</code>는 디스플레이 포인터 하나만 받고 불린다. 이전 after function을 돌려준다.</p>
+<pre><code>int (*XSynchronize(Display *display, Bool onoff))();</code></pre>
+<p><code>onoff</code>가 <code>True</code>면 동기 동작을 켜고 <code>False</code>면 끈다. 이전 after function을 돌려준다. 내부적으로는 매 요청 뒤에 <code>XSync</code>를 부르는 after function을 설치하는 것과 같다.</p>
+<pre><code>#ifdef DEBUG
+XSynchronize(dpy, True);   /* 오류가 난 함수에서 바로 처리기가 불린다 */
+#endif</code></pre>
+<div class="tip">디버거에서 오류 위치를 찾는 법: <code>XSynchronize(dpy, True)</code>를 켜고 오류 처리기 안에 중단점을 걸면, 콜 스택에서 오류를 낸 Xlib 호출을 바로 볼 수 있다. 동기 모드가 꺼져 있으면 스택에는 엉뚱한 나중 호출이 보인다.</div>
+
+<h4>기본 오류 처리기 사용하기</h4>
+<p>Xlib에는 기본 오류 처리기가 두 개 있다. 하나는 치명적 상황(예: 기계가 죽어서 디스플레이 서버와의 연결이 끊김)을 위한 것이고, 다른 하나는 X 서버가 보낸 프로토콜 오류를 위한 것이다. 둘 다 원하는 함수로 언제든 몇 번이든 바꿀 수 있다. <code>NULL</code>을 넘기면 기본 처리기로 돌아간다. 기본 처리기는 설명 메시지를 출력하고 프로그램을 끝낸다(exit).</p>
+<pre><code>int (*XSetErrorHandler(int (*handler)(Display *, XErrorEvent *)))();</code></pre>
+<p>프로토콜 오류 처리기를 설정하고, 이전 처리기를 돌려준다.</p>
+<ul>
+<li>Xlib은 오류를 받을 때마다 대체로 이 처리기를 부른다. 단 <code>OpenFont</code>, <code>LookupColor</code>, <code>AllocNamedColor</code> 요청의 <code>BadName</code> 오류와 <code>QueryFont</code> 요청의 <code>BadFont</code> 오류에는 부르지 않는다. 이런 오류는 함수의 반환값으로 프로그램에 알려진다(예: <code>XLoadQueryFont</code>가 <code>NULL</code>을 돌려줌).</li>
+<li>치명적인 상황으로 가정하지 않으므로 처리기가 그냥 return해도 된다. 반환값은 무시된다.</li>
+<li>처리기 안에서는 그 디스플레이에 프로토콜 요청을 만들거나 입력 이벤트를 찾는 함수를 (직접이든 간접이든) 부르면 안 된다. Xlib 내부가 오류를 처리하는 도중이기 때문이다.</li>
+</ul>
+<p>처리기가 받는 <code>XErrorEvent</code>:</p>
+<pre><code>typedef struct {
+	int type;
+	Display *display;           /* 오류를 읽어 온 디스플레이 */
+	unsigned long serial;       /* 실패한 요청의 일련번호 */
+	unsigned char error_code;   /* 오류 코드 */
+	unsigned char request_code; /* 실패한 요청의 major opcode */
+	unsigned char minor_code;   /* 실패한 요청의 minor opcode */
+	XID resourceid;             /* 관련 자원 ID */
+} XErrorEvent;</code></pre>
+<ul>
+<li><code>serial</code>: 연결을 연 뒤 보낸 요청 수(1부터). 실패한 호출 직전의 <code>NextRequest(dpy)</code> 값과 같다. 그래서 의심 가는 호출 전에 <code>NextRequest</code>를 기록해 두면 어떤 호출이 오류를 냈는지 맞춰 볼 수 있다.</li>
+<li><code>request_code</code>: 실패한 프로토콜 요청 번호(<code>&lt;X11/Xproto.h&gt;</code>의 <code>X_CreateWindow</code> 등).</li>
+<li><code>error_code</code>: 아래 표의 코드.</li>
+<li><code>resourceid</code>: 문제가 된 자원(창, GC 등)의 ID.</li>
+</ul>
+
+<h4>예: 오류 처리기로 BadWindow 잡기</h4>
+<p>다른 프로그램의 창을 다룰 때는 그 창이 언제 사라질지 모른다. 기본 처리기는 <code>BadWindow</code>를 받으면 프로그램을 끝내 버리므로, 위험한 구간만 처리기를 바꿔 오류를 "잡는" 방법을 흔히 쓴다.</p>
+<pre><code>/* cc trap.c -lX11 */
+#include &lt;X11/Xlib.h&gt;
+#include &lt;stdio.h&gt;
+
+static int trapped_error = 0;
+
+static int trap_handler(Display *dpy, XErrorEvent *e) {
+    char msg[128];
+    XGetErrorText(dpy, e-&gt;error_code, msg, sizeof msg);  /* 로컬 조회, 요청 안 만듦 */
+    fprintf(stderr, "X error: %s (request %d, serial %lu, id 0x%lx)\n",
+            msg, e-&gt;request_code, e-&gt;serial, e-&gt;resourceid);
+    trapped_error = e-&gt;error_code;
+    return 0;                      /* 반환값은 무시됨, 프로그램은 계속 */
+}
+
+/* 창이 이미 없어졌어도 죽지 않고 False를 돌려준다 */
+Bool safe_get_attrs(Display *dpy, Window w, XWindowAttributes *wa) {
+    int (*old)(Display *, XErrorEvent *);
+    Status ok;
+
+    XSync(dpy, False);             /* 앞서 쌓인 요청의 오류는 원래 처리기로 */
+    trapped_error = 0;
+    old = XSetErrorHandler(trap_handler);
+    ok = XGetWindowAttributes(dpy, w, wa);
+    XSync(dpy, False);             /* 이 구간의 오류가 지금 처리되게 함 */
+    XSetErrorHandler(old);         /* 원래 처리기 복원 */
+    return ok &amp;&amp; trapped_error == 0;
+}</code></pre>
+<p>핵심은 앞뒤의 <code>XSync</code>다. 오류는 비동기로 오므로, 처리기를 바꾸기 전에 <code>XSync</code>로 이전 요청의 오류를 모두 처리해 두고, 구간이 끝난 뒤에 다시 <code>XSync</code>로 이 구간의 오류가 바뀐 처리기에서 처리되도록 강제한다. 마지막 <code>XSync</code>를 빼면 오류가 처리기를 되돌린 <b>뒤에</b> 도착해 기본 처리기가 프로그램을 끝낼 수 있다.</p>
+<div class="tip">함정: 처리기 안에서 <code>XSync</code>, <code>XNextEvent</code>, 창 그리기 같은 함수를 부르면 안 된다. 기록만 하고 돌아온 뒤 처리기 밖에서 대응한다. 또 <code>XSetErrorHandler</code>는 디스플레이별이 아니라 프로세스 전체에 하나다. 라이브러리 안에서 바꿨다면 반드시 이전 처리기로 되돌린다.</div>
+
+<h4>오류 코드 표</h4>
+<table>
+<tr><th>오류 코드</th><th>뜻</th></tr>
+<tr><td><code>BadAccess</code></td><td>다른 클라이언트가 이미 그랩한 키/버튼 조합을 그랩하려 함; 할당하지 않은 컬러맵 항목을 해제하거나, 모든 항목이 쓰기 가능하게 만들어진 컬러맵의 항목을 해제하려 함; 읽기 전용이거나 할당 안 된 컬러맵 항목에 저장하려 함; 로컬(또는 인가된) 호스트가 아닌 곳에서 접근 제어 목록을 바꾸려 함; 다른 클라이언트가 이미 고른 이벤트 종류(한 클라이언트만 가능한 것)를 고르려 함</td></tr>
+<tr><td><code>BadAlloc</code></td><td>서버가 요청한 자원을 할당하지 못함. 요청별로 명시된 <code>BadAlloc</code>은 대략적인 것일 뿐이고, 서버는 메모리가 모자라면 어떤 요청에도 이 오류를 낼 수 있으므로 클라이언트는 받을 준비를 해야 한다</td></tr>
+<tr><td><code>BadAtom</code></td><td>아톰 인자가 정의된 아톰이 아님</td></tr>
+<tr><td><code>BadColor</code></td><td>컬러맵 인자가 정의된 컬러맵이 아님</td></tr>
+<tr><td><code>BadCursor</code></td><td>커서 인자가 정의된 커서가 아님</td></tr>
+<tr><td><code>BadDrawable</code></td><td>drawable 인자가 정의된 창이나 픽스맵이 아님</td></tr>
+<tr><td><code>BadFont</code></td><td>폰트 인자가 정의된 폰트가 아님(경우에 따라 GContext)</td></tr>
+<tr><td><code>BadGC</code></td><td>GContext 인자가 정의된 GContext가 아님</td></tr>
+<tr><td><code>BadIDChoice</code></td><td>자원 ID가 클라이언트에 할당된 범위 밖이거나 이미 사용 중. 정상이라면 생기지 않으며 서버나 Xlib의 오류로 봐야 한다</td></tr>
+<tr><td><code>BadImplementation</code></td><td>서버가 요청의 어떤 부분을 구현하지 않음. 코어 요청에서 이것을 내는 서버는 결함이 있는 것이지만, 클라이언트는 받을 준비를 해야 한다</td></tr>
+<tr><td><code>BadLength</code></td><td>요청 길이가 인자를 담기에 짧거나 김(Xlib이나 서버 내부 오류); 또는 요청 길이가 서버가 받는 최대 길이를 넘음</td></tr>
+<tr><td><code>BadMatch</code></td><td>그래픽 요청에서 GC의 루트·깊이가 drawable과 맞지 않음; <code>InputOnly</code> 창을 drawable로 씀; 인자의 타입·범위는 맞지만 요청이 요구하는 다른 조건에 맞지 않음; <code>InputOnly</code> 창에 없는 속성을 다룸</td></tr>
+<tr><td><code>BadName</code></td><td>지정한 이름의 폰트나 색이 없음</td></tr>
+<tr><td><code>BadPixmap</code></td><td>픽스맵 인자가 정의된 픽스맵이 아님</td></tr>
+<tr><td><code>BadRequest</code></td><td>major/minor opcode가 올바른 요청이 아님. 보통 Xlib이나 서버 오류</td></tr>
+<tr><td><code>BadValue</code></td><td>숫자 값이 요청이 받는 범위를 벗어남. 범위가 따로 정해지지 않은 인자는 그 타입의 전체 범위를 받는다. 여러 선택지 중 하나를 고르는 인자는 대개 이 오류를 낼 수 있다</td></tr>
+<tr><td><code>BadWindow</code></td><td>창 인자가 정의된 창이 아님</td></tr>
+</table>
+<p><code>BadAtom</code>, <code>BadColor</code>, <code>BadCursor</code>, <code>BadDrawable</code>, <code>BadFont</code>, <code>BadGC</code>, <code>BadPixmap</code>, <code>BadWindow</code>는 인자 타입이 고정된 특수값(예: <code>None</code>, <code>ParentRelative</code>)으로 확장된 경우에도 쓰인다.</p>
+
+<h4>오류 메시지 문자열 얻기</h4>
+<pre><code>XGetErrorText(Display *display, int code, char *buffer_return, int length);</code></pre>
+<p>오류 코드 <code>code</code>를 설명하는 널 종료 문자열을 <code>buffer_return</code>(크기 <code>length</code>)에 복사한다. 텍스트는 현재 로캘의 인코딩이다. 확장이 자기 오류 코드와 문자열을 정의할 수 있으므로, 직접 표를 만들지 말고 이 함수를 쓰는 것이 권장된다.</p>
+<pre><code>XGetErrorDatabaseText(Display *display, char *name, char *message, char *default_string, char *buffer_return, int length);</code></pre>
+<p>오류 메시지 데이터베이스에서 메시지를 찾아(없으면 <code>default_string</code>) 널 종료 문자열로 돌려준다. Xlib이 내부적으로 자기 오류 메시지를 찾을 때 쓴다. <code>default_string</code>과 결과 모두 현재 로캘 인코딩이다.</p>
+<ul>
+<li><code>name</code>: 보통 앱 이름. <code>message</code>: 원하는 메시지 종류. 둘이 Host Portable Character Encoding이 아니면 결과는 구현에 따라 다르다.</li>
+<li>Xlib이 쓰는 미리 정의된 "앱 이름" 세 개(대소문자 구분):
+<ul>
+<li><code>XProtoError</code>: 프로토콜 오류 번호를 문자열로 만들어 <code>message</code>로 쓴다.</li>
+<li><code>XlibMessage</code>: 라이브러리 내부 메시지 문자열.</li>
+<li><code>XRequest</code>: 코어 요청은 major 요청 번호를, 확장 요청은 "확장 이름(InitExtension에 준 것).minor 번호"를 <code>message</code>로 쓴다.</li>
+</ul></li>
+</ul>
+<p>요청 번호를 사람이 읽는 이름으로 바꾸는 예:</p>
+<pre><code>char num[16], reqname[64];
+snprintf(num, sizeof num, "%d", e-&gt;request_code);
+XGetErrorDatabaseText(dpy, "XRequest", num, "unknown", reqname, sizeof reqname);
+fprintf(stderr, "failed request: %s\n", reqname);   /* 예: "X_GetWindowAttributes" */</code></pre>
+
+<h4>디스플레이 이름 보고</h4>
+<pre><code>char *XDisplayName(char *string);</code></pre>
+<p><code>XOpenDisplay</code>가 쓰려고 할 디스플레이 이름을 돌려준다. <code>NULL</code>을 주면 환경 변수(<code>DISPLAY</code>)에서 찾아 그 이름을 돌려준다. 연결에 실패했을 때 사용자에게 정확히 어느 디스플레이를 열려 했는지 알려 주는 데 쓴다(11장 첫 예제 참고).</p>
+
+<h4>치명적 I/O 오류 처리기</h4>
+<pre><code>int (*XSetIOErrorHandler(int (*handler)(Display *)))(Display *);</code></pre>
+<p>치명적 I/O 오류 처리기를 설정하고 이전 처리기를 돌려준다. 서버와의 연결이 끊기는 등 시스템 호출 오류가 생기면 불린다. 치명적 상황으로 가정하므로 처리기는 return하지 않아야 한다. return하면 클라이언트 프로세스가 끝난다(exit).</p>
+<pre><code>static int on_io_error(Display *dpy) {
+    (void)dpy;
+    fprintf(stderr, "X 서버 연결이 끊겼다. 작업을 저장하고 끝낸다.\n");
+    save_user_work();      /* X 함수가 아닌 정리만 한다 */
+    exit(1);               /* 어차피 return하면 Xlib이 exit한다 */
+}
+...
+XSetIOErrorHandler(on_io_error);</code></pre>
+<div class="tip">I/O 오류 처리기 안에서는 연결이 이미 죽었으므로 그 디스플레이에 Xlib 함수를 쓰지 않는다. 파일 저장 같은 X와 무관한 정리만 하고 끝낸다. "X 서버가 죽어도 앱이 살아남게" 하려면 <code>longjmp</code> 같은 위험한 방법이 필요한데, Xlib 내부 상태가 깨진 채 남으므로 그 <code>Display</code>를 다시 쓸 수 없다.</div>
+</section><div class="pager"><a href="ch10.html">← 10장. 이벤트 (Events)</a><a href="./">차례</a><a href="ch12.html">12장. 입력 장치 함수 (Input Device Functions) →</a></div>
+<a class="top" href="#">↑ 위로</a>
+</html>

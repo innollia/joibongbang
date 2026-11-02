@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>부록 C. 확장 (Extensions) — Xlib 한국어</title>
+<style>
+body{font:16px/1.75 system-ui,"Malgun Gothic",sans-serif;max-width:860px;margin:40px auto;padding:0 16px;background:#111;color:#e8e8e8}
+a{color:#7cf} h1{line-height:1.3} h2{margin-top:3em;border-bottom:1px solid #444;padding-bottom:.3em} h2 small{color:#999;font-weight:normal;font-size:.6em}
+h3{margin-top:2em;color:#fd8} h4{color:#9df}
+code{font-family:ui-monospace,Consolas,monospace;font-size:.92em;background:#222;padding:1px 4px;border-radius:3px}
+pre{background:#1b1d22;border:1px solid #333;padding:12px;overflow-x:auto;border-radius:6px;line-height:1.45} pre code{background:none;padding:0}
+.tip{background:#1d2a1d;border-left:4px solid #6c6;padding:8px 12px;margin:1em 0;border-radius:4px}
+table{border-collapse:collapse;margin:1em 0;font-size:.92em;display:block;overflow-x:auto} td,th{border:1px solid #444;padding:4px 8px;vertical-align:top} th{background:#222}
+nav ol{columns:2} .top{position:fixed;right:16px;bottom:16px;background:#333;padding:6px 10px;border-radius:6px;text-decoration:none}
+.pager{display:flex;justify-content:space-between;gap:12px;margin:2em 0;padding-top:1em;border-top:1px solid #444} .pager a{text-decoration:none}
+</style>
+<p><a href="../../">← 조이봉방</a> · <a href="./">Xlib 번역 차례</a></p><div class="pager"><a href="apB.html">← 부록 B. X 폰트 커서 (X Font Cursors)</a><a href="./">차례</a><a href="apD.html">부록 D. 호환성 함수 (Compatibility Functions) →</a></div><section id="apC"><h2 style="margin-top:1em">부록 C. 확장 <small>(Extensions)</small></h2>
+<p>X는 핵심 프로토콜에 <b>확장(extension)</b>을 더해 발전한다(SHAPE, XInput, RENDER 등). 확장이 "이류 시민"처럼 느껴지지 않으려면, 확장 함수도 핵심 함수와 똑같은 방식·속도로 쓸 수 있어야 하고, 응용이 따로 초기화하지 않아도 <b>처음 불릴 때 스스로 초기화(지연 초기화)</b>되어야 한다. 이 부록은 그런 확장 라이브러리(클라이언트 쪽 "stub")를 Xlib 위에 쓰는 방법을 설명한다. 응용 프로그래머보다는 확장 라이브러리 작성자를 위한 내용이다. 관련 기호와 매크로는 <code>&lt;X11/Xlibint.h&gt;</code>에 있다.</p>
+<div class="tip">원문 권고: 기능 10개를 확장 10개로 만들지 말고, 한 확장 안에 넣고 <b>부 opcode(minor opcode)</b>로 요청을 구분하라.</div>
+
+<h3>C.1 기본 프로토콜 지원 함수</h3>
+<pre><code>Bool   XQueryExtension(Display *display, char *name, int *major_opcode_return,
+                       int *first_event_return, int *first_error_return);
+char **XListExtensions(Display *display, int *nextensions_return);
+       XFreeExtensionList(char **list);</code></pre>
+<ul>
+<li><code>XQueryExtension</code>: 이름의 확장이 있으면 <code>True</code>와 함께 주 opcode, 첫 이벤트 번호, 첫 오류 번호를 돌려준다(없는 것은 0). 이름은 대소문자를 구분한다. 응용 프로그래머도 "이 서버에 SHAPE가 있나?"를 확인할 때 쓴다.</li>
+<li><code>XListExtensions</code>: 서버가 지원하는 확장 이름 목록. <code>XFreeExtensionList</code>로 해제.</li>
+</ul>
+<pre><code>int n; char **ext = XListExtensions(dpy, &amp;n);
+for (int i = 0; i &lt; n; i++) puts(ext[i]);
+XFreeExtensionList(ext);
+
+int op, ev, err;
+if (XQueryExtension(dpy, "SHAPE", &amp;op, &amp;ev, &amp;err))
+    printf("SHAPE: major=%d first_event=%d first_error=%d\n", op, ev, err);</code></pre>
+
+<h3>C.2 Xlib에 연결하기 (Hooking into Xlib)</h3>
+<p>확장 stub은 먼저 이 연결(Display)에서 자기가 초기화됐는지 확인하고, 아니면 <code>XInitExtension</code>을 부른다.</p>
+<pre><code>typedef struct _XExtCodes {
+    int extension;      /* 확장 번호(이 연결 안에서만 고유) */
+    int major_opcode;   /* 서버가 준 주 opcode */
+    int first_event;    /* 확장의 첫 이벤트 번호 */
+    int first_error;    /* 확장의 첫 오류 번호 */
+} XExtCodes;
+
+XExtCodes *XInitExtension(Display *display, char *name);
+XExtCodes *XAddExtension(Display *display);</code></pre>
+<ul>
+<li><code>XInitExtension</code>: 확장이 있는지 확인하고, 연결의 확장 목록에 정보를 붙인 뒤 돌려준다. 없으면 <code>NULL</code>.</li>
+<li><code>XAddExtension</code>: 서버 확장 없이 순수히 클라이언트 쪽에서만 동작하는 "로컬 Xlib 확장"용. 번호만 하나 받아 목록에 붙인다.</li>
+</ul>
+
+<h4>라이브러리 갈고리 (Hooks into the Library)</h4>
+<p>특정 상황에 Xlib이 확장의 함수를 불러 주도록 등록하는 함수들이다. 모두 <b>이전에 등록된 함수를 돌려준다</b>. 자주 쓰지 않아 요약만 한다.</p>
+<table>
+<tr><th>함수</th><th>불리는 때</th></tr>
+<tr><td><code>XESetCloseDisplay</code></td><td><code>XCloseDisplay</code> 때(확장의 정리 작업)</td></tr>
+<tr><td><code>XESetCreateGC</code>, <code>XESetCopyGC</code>, <code>XESetFreeGC</code>, <code>XESetFlushGC</code></td><td>GC 생성·복사·해제·캐시 비우기 때</td></tr>
+<tr><td><code>XESetCreateFont</code>, <code>XESetFreeFont</code></td><td>폰트 읽기·해제 때</td></tr>
+<tr><td><code>XESetWireToEvent</code>, <code>XESetEventToWire</code></td><td>확장 이벤트를 전송 형식(wire)↔<code>XEvent</code>로 바꿀 때</td></tr>
+<tr><td><code>XESetWireToError</code>, <code>XESetError</code></td><td>확장 오류를 바꾸거나 가로챌 때</td></tr>
+<tr><td><code>XESetErrorString</code>, <code>XESetPrintErrorValues</code></td><td><code>XGetErrorText</code>나 기본 오류 처리기가 오류 문구·값을 출력할 때</td></tr>
+</table>
+<p>새 이벤트 구조체를 정의할 때 규칙: 첫 멤버는 <code>int type</code>, 둘째는 <code>unsigned long serial</code>, 셋째는 <code>Bool send_event</code>, 넷째는 <code>Display *display</code>, 다섯째는 (보통 창) 리소스 ID여야 한다(값이 없으면 0). 크기는 <code>XEvent</code> 공용체보다 클 수 없다.</p>
+
+<h4>Xlib 자료 구조에 데이터 붙이기</h4>
+<p><code>Display</code>, <code>GC</code>, <code>Visual</code>, <code>Screen</code>, <code>ScreenFormat</code>, <code>XFontStruct</code>에는 확장이 자기 데이터를 붙일 수 있는 목록(<code>XExtData</code>)이 있다. <code>XEHeadOfExtensionList</code>로 목록 머리를 얻고, <code>XAddToExtensionList</code>로 붙이고(<code>ext_data-&gt;number</code>에 확장 번호를 먼저 넣는다), <code>XFindOnExtensionList</code>로 찾는다. 확장 하나는 한 구조체에 데이터를 하나만 붙인다고 가정한다. 구조체가 해제될 때 목록의 각 항목의 free 함수가 불리며, free가 <code>NULL</code>이면 Xlib이 <code>private_data</code>와 항목을 함께 해제한다.</p>
+
+<h3>C.3 GC 캐싱 (GC Caching)</h3>
+<p>Xlib은 GC 변경을 바로 보내지 않고 모아 두었다가 하나의 ChangeGC로 보낸다(write-back 캐시). 그래서 GC 내용에 의존하는 확장 요청을 보내기 전에는 반드시 <code>FlushGC(display, gc)</code> 매크로로 캐시를 비워야 서버가 최신 GC를 본다. GC에 리소스 ID 성분을 추가하는 확장이라면 변경을 즉시 보내야 한다(클라이언트가 그 리소스를 곧바로 해제할 수 있으므로). 강제로 비우려면 <code>_XFlushGCCache(display, gc)</code>를 쓴다.</p>
+
+<h3>C.4 그래픽 일괄 처리 (Graphics Batching)</h3>
+<p>점 하나씩 그리는 순진한 프로그램도 빠르게 만들기 위해, Xlib은 직전 요청(<code>dpy-&gt;last_req</code>)이 같은 종류·같은 drawable·같은 GC이고 버퍼에 여유가 있으면 새 요청을 만들지 않고 <b>직전 요청의 길이만 늘려</b> 데이터를 덧붙인다. 원문은 <code>XDrawPoint</code>의 실제 소스로 이를 보여 주며, 5배 이상 빨라질 수 있다고 한다. 한 요청이 서버를 독점하지 않도록 합칠 수 있는 개수는 <code>EPERBATCH</code>로 제한한다. <code>FlushGC</code>가 <code>last_req</code>를 바꿀 수 있으므로 <code>last_req</code>를 읽기 <b>전에</b> <code>FlushGC</code>를 불러야 한다.</p>
+
+<h3>C.5 확장 stub 작성 (Writing Extension Stubs)</h3>
+<h4>요청과 응답의 모양</h4>
+<ul>
+<li>모든 요청은 8비트 주 opcode, 4바이트 단위의 16비트 길이를 가진 4바이트 헤더로 시작한다. 길이는 헤더 포함 전체 길이이며, 필요한 최소 길이와 다르면 서버가 <code>BadLength</code>를 낸다. 그래서 한 요청은 최대 256KB이고, 서버의 실제 한계는 <code>dpy-&gt;max_request_size</code>에 있다(프로토콜이 보장하는 최소는 4096단위=16384바이트).</li>
+<li>주 opcode 128~255는 확장용이다. 확장 요청은 보통 헤더의 둘째 바이트에 <b>부 opcode</b>를 넣는다.</li>
+<li><code>&lt;X11/Xproto.h&gt;</code>에는 요청 번호(<code>X_DoSomething</code>), 요청 구조체(<code>xDoSomethingReq</code>), 응답 구조체(<code>xDoSomethingReply</code>)가 이런 이름 규칙으로 정의돼 있다. 확장은 같은 규칙으로 자기 헤더를 만들고, 거기서 <code>X_</code> 번호는 부 opcode가 된다.</li>
+<li>인자가 32비트 하나뿐인 요청은 <code>xResourceReq</code>, 인자가 없는 요청은 <code>xReq</code>를 쓴다.</li>
+<li>응답은 대부분 32바이트이고, 길이 필드는 32바이트를 넘는 부분을 4로 나눈 값이다. 데이터가 없는 응답은 <code>xGenericReply</code>를 쓴다.</li>
+</ul>
+<h4>stub의 뼈대</h4>
+<ol>
+<li><code>LockDisplay(dpy)</code>로 임계 구역 시작(멀티스레드 대비).</li>
+<li><code>GetReq</code>/<code>GetReqExtra</code>/<code>GetResReq</code>/<code>GetEmptyReq</code> 매크로로 버퍼에 요청을 잡고 필드를 채운다. 이 매크로들은 이름 규칙(<code>X_이름</code>, <code>x이름Req</code>)에 기대므로 첫 인자로 <code>X_</code>를 뺀 요청 이름을 준다. 새 리소스 ID가 필요하면 <code>XAllocID</code>.</li>
+<li>가변 길이 데이터는 <code>req-&gt;length += (nbytes+3)&gt;&gt;2;</code>로 길이를 늘리고 <code>Data</code>/<code>Data16</code>/<code>Data32</code> 매크로로 보낸다. 이 매크로들은 마지막 인자를 여러 번 평가할 수 있으니 식 대신 변수를 넘긴다.</li>
+<li>응답이 있으면 <code>_XReply(dpy, (xReply *)&amp;rep, extra, discard)</code>로 받는다. <code>extra</code>는 32바이트를 넘는 32비트 워드 수(보통 0), <code>discard</code>는 뒤따르는 가변 데이터가 없으면 <code>True</code>, 있으면 <code>False</code>로 두고 <code>_XRead</code>/<code>_XReadPad</code>/<code>_XRead16</code>/<code>_XRead32</code> 등으로 마저 읽는다. 오류를 받으면 <code>_XReply</code>는 <code>False</code>.</li>
+<li><code>UnlockDisplay(dpy)</code> 후, 돌아가기 직전에 <code>SyncHandle()</code>(동기 모드 지원).</li>
+</ol>
+<pre><code>/* 가상의 확장 "MY-EXT"의 요청 하나. myextproto.h 에는
+   X_MyExtGetValue(부 opcode), xMyExtGetValueReq, xMyExtGetValueReply,
+   sz_xMyExtGetValueReq 가 정의돼 있다고 가정한다. */
+#include &lt;X11/Xlibint.h&gt;
+#include "myextproto.h"
+
+Status XMyExtGetValue(Display *dpy, Window w, int *value_return)
+{
+    XExtCodes *codes = my_find_codes(dpy);  /* 연결마다 한 번만 XInitExtension 하는 함수 */
+    xMyExtGetValueReq   *req;
+    xMyExtGetValueReply  rep;
+
+    if (!codes) return 0;
+    LockDisplay(dpy);
+    GetReq(MyExtGetValue, req);
+    req-&gt;reqType      = codes-&gt;major_opcode;   /* 주 opcode */
+    req-&gt;myExtReqType = X_MyExtGetValue;       /* 부 opcode */
+    req-&gt;window       = w;
+    if (!_XReply(dpy, (xReply *) &amp;rep, 0, True)) {
+        UnlockDisplay(dpy);
+        SyncHandle();
+        return 0;
+    }
+    *value_return = rep.value;
+    UnlockDisplay(dpy);
+    SyncHandle();
+    return 1;
+}</code></pre>
+<div class="tip"><code>GetReq</code>는 <code>reqType</code>에 <code>X_MyExtGetValue</code>를 넣으므로, 확장에서는 위처럼 주 opcode로 덮어쓰고 부 opcode 필드를 따로 채워야 한다. 또 <code>XInitExtension</code>은 부를 때마다 목록에 항목을 붙이므로, stub마다 매번 부르지 말고 연결별로 한 번만 불러 결과를 보관해야 한다(아래 C.6).</div>
+
+<h4>메모리와 이식성 (요약)</h4>
+<ul>
+<li>재진입 안전을 위해 C 라이브러리 할당 함수 대신 Xlib이 정의한 대응 함수(<code>Xmalloc</code>, <code>Xfree</code> 등)를 쓴다. 임계 구역 안에서만 쓸 임시 버퍼는 <code>_XAllocScratch</code>(다른 스레드가 Xlib에 들어올 수 있는 호출 뒤에는 무효), 임계 구역을 넘어 쓸 버퍼는 <code>_XAllocTemp</code>/<code>_XFreeTemp</code>(같은 포인터와 크기로 반납).</li>
+<li>요청·응답 안의 데이터는 자연 정렬(16비트는 16비트 경계, 32비트는 32비트 경계)이어야 하고, 요청 길이는 32비트의 배수로 채운다. 채움 바이트는 0으로 두기를 권한다(정보 누출 방지, 압축률).</li>
+<li>부동소수점은 기계마다 달라 가능하면 피한다. 프로토콜의 CARD16은 <code>unsigned int</code>, CARD32는 <code>unsigned long</code>으로 선언한다. 64비트 기계에서는 <code>long</code>이 64비트라, 프로토콜에서 32비트인 배열을 응용의 <code>long</code> 배열로 주고받을 때 특히 조심한다.</li>
+</ul>
+
+<h3>C.6 올바른 확장 opcode 얻기</h3>
+<p>원문이 소개하는 가장 단순한 방법: 파일 기술자 수(<code>_NFILE</code>)만큼의 <code>XExtCodes *</code> 배열을 <code>NULL</code>로 만들어 두고, stub에 들어올 때 디스플레이의 파일 기술자로 배열을 찾는다. <code>NULL</code>이면 처음이니 초기화 함수에서 <code>XInitExtension</code>을 불러 결과를 저장하고, 닫힐 때 칸을 비우도록 <code>XESetCloseDisplay</code>로 close 처리기를 등록하며, 이벤트 변환 함수 등 필요한 설정을 한다. 그 뒤로는 저장된 <code>XExtCodes</code>에서 주 opcode를 바로 꺼내 쓴다.</p>
+</section><div class="pager"><a href="apB.html">← 부록 B. X 폰트 커서 (X Font Cursors)</a><a href="./">차례</a><a href="apD.html">부록 D. 호환성 함수 (Compatibility Functions) →</a></div>
+<a class="top" href="#">↑ 위로</a>
+</html>

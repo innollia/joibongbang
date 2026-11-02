@@ -1,0 +1,548 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>4장. 윈도 정보 함수 (Window Information Functions) — Xlib 한국어</title>
+<style>
+body{font:16px/1.75 system-ui,"Malgun Gothic",sans-serif;max-width:860px;margin:40px auto;padding:0 16px;background:#111;color:#e8e8e8}
+a{color:#7cf} h1{line-height:1.3} h2{margin-top:3em;border-bottom:1px solid #444;padding-bottom:.3em} h2 small{color:#999;font-weight:normal;font-size:.6em}
+h3{margin-top:2em;color:#fd8} h4{color:#9df}
+code{font-family:ui-monospace,Consolas,monospace;font-size:.92em;background:#222;padding:1px 4px;border-radius:3px}
+pre{background:#1b1d22;border:1px solid #333;padding:12px;overflow-x:auto;border-radius:6px;line-height:1.45} pre code{background:none;padding:0}
+.tip{background:#1d2a1d;border-left:4px solid #6c6;padding:8px 12px;margin:1em 0;border-radius:4px}
+table{border-collapse:collapse;margin:1em 0;font-size:.92em;display:block;overflow-x:auto} td,th{border:1px solid #444;padding:4px 8px;vertical-align:top} th{background:#222}
+nav ol{columns:2} .top{position:fixed;right:16px;bottom:16px;background:#333;padding:6px 10px;border-radius:6px;text-decoration:none}
+.pager{display:flex;justify-content:space-between;gap:12px;margin:2em 0;padding-top:1em;border-top:1px solid #444} .pager a{text-decoration:none}
+</style>
+<p><a href="../../">← 조이봉방</a> · <a href="./">Xlib 번역 차례</a></p><div class="pager"><a href="ch3.html">← 3장. 창 함수 (Window Functions)</a><a href="./">차례</a><a href="ch5.html">5장. 픽스맵과 커서 함수 (Pixmap and Cursor Functions) →</a></div><section id="ch4"><h2 style="margin-top:1em">4장. 윈도 정보 함수 <small>(Window Information Functions)</small></h2>
+
+<p>디스플레이에 연결하고 윈도를 만들었다면, 이제 그 윈도에 대해 "물어보는" 함수들이 필요하다. 이 장은 다섯 가지를 다룬다.</p>
+<ul>
+<li>윈도 정보 얻기: 윈도 트리(부모·자식), 현재 속성, 현재 위치·크기</li>
+<li>화면 좌표 변환: 한 윈도의 좌표를 다른 윈도 기준으로 바꾸기, 포인터 위치 묻기</li>
+<li>프로퍼티와 아톰: 윈도에 이름 붙은 데이터를 다는 방법과 그 이름(아톰)</li>
+<li>윈도 프로퍼티 읽기·쓰기</li>
+<li>셀렉션: 복사·붙여넣기의 바탕이 되는 클라이언트 간 데이터 교환</li>
+</ul>
+<p>X에서는 윈도 상태가 서버에 있다. 그래서 여기 나오는 함수 대부분은 서버에 요청을 보내고 답을 기다리는 <b>왕복(round trip)</b> 함수다. 한 번 부를 때마다 네트워크 왕복이 한 번 생긴다는 점을 기억해 두면 성능 문제를 피하기 쉽다.</p>
+
+<h3>4.1 윈도 정보 얻기 (Obtaining Window Information)</h3>
+<p>이 절의 함수들은 윈도 트리, 윈도의 현재 속성, 현재 지오메트리(위치·크기), 포인터 좌표를 알려 준다. 이 함수들은 주로 윈도 매니저가 쓰는데, 윈도 매니저는 남의 윈도를 다루므로 그 윈도가 이미 사라졌을 수도 있다. 그래서 이 함수들은 모두 "윈도가 아직 있는지"를 알 수 있도록 상태값(Status)을 돌려준다.</p>
+
+<h4>XQueryTree</h4>
+<pre><code>Status XQueryTree(Display *display, Window w, Window *root_return,
+                  Window *parent_return, Window **children_return,
+                  unsigned int *nchildren_return);</code></pre>
+<p>윈도 <code>w</code>의 루트, 부모, 자식 목록과 자식 수를 얻는다.</p>
+<ul>
+<li><code>children_return</code>: 자식 윈도 배열. 자식이 없으면 NULL이다.</li>
+<li>자식은 현재 쌓임 순서(stacking order)대로 들어 있다. <b>맨 아래가 첫 번째, 맨 위가 마지막</b>이다.</li>
+<li>실패하면 0, 성공하면 0이 아닌 값을 돌려준다. <code>BadWindow</code> 오류가 날 수 있다.</li>
+</ul>
+<pre><code>#include &lt;stdio.h&gt;
+#include &lt;X11/Xlib.h&gt;
+
+int main(void) {
+    Display *dpy = XOpenDisplay(NULL);
+    if (!dpy) return 1;
+    Window root, parent, *kids = NULL;
+    unsigned int n;
+    if (XQueryTree(dpy, DefaultRootWindow(dpy), &amp;root, &amp;parent, &amp;kids, &amp;n)) {
+        printf("루트의 자식 %u개\n", n);
+        for (unsigned int i = 0; i &lt; n; i++)
+            printf("  0x%lx\n", kids[i]);   /* 아래에서 위 순서 */
+        if (kids) XFree(kids);
+    }
+    XCloseDisplay(dpy);
+    return 0;
+}</code></pre>
+<div class="tip">자식 목록은 Xlib가 할당한 메모리다. <code>free()</code>가 아니라 <code>XFree()</code>로 풀어야 하고, NULL이 아닐 때만 푼다. 또 목록을 받은 직후에도 다른 클라이언트가 윈도를 없앨 수 있으므로, 이후 그 ID로 부르는 함수가 <code>BadWindow</code>를 낼 수 있다고 생각하고 짠다.</div>
+
+<h4>XGetWindowAttributes</h4>
+<pre><code>Status XGetWindowAttributes(Display *display, Window w,
+                            XWindowAttributes *window_attributes_return);</code></pre>
+<p>윈도의 현재 속성 전체를 <code>XWindowAttributes</code> 구조체로 받는다.</p>
+<pre><code>typedef struct {
+    int x, y;                     /* 윈도 위치 */
+    int width, height;            /* 윈도 너비와 높이 */
+    int border_width;             /* 테두리 두께 */
+    int depth;                    /* 깊이 */
+    Visual *visual;               /* 연결된 비주얼 */
+    Window root;                  /* 윈도가 속한 화면의 루트 */
+    int class;                    /* InputOutput, InputOnly */
+    int bit_gravity;              /* 비트 중력 값 */
+    int win_gravity;              /* 윈도 중력 값 */
+    int backing_store;            /* NotUseful, WhenMapped, Always */
+    unsigned long backing_planes; /* 가능하면 보존할 플레인 */
+    unsigned long backing_pixel;  /* 플레인 복원에 쓸 값 */
+    Bool save_under;              /* 아래 내용을 저장할지 */
+    Colormap colormap;            /* 윈도의 컬러맵 */
+    Bool map_installed;           /* 컬러맵이 지금 설치돼 있는지 */
+    int map_state;                /* IsUnmapped, IsUnviewable, IsViewable */
+    long all_event_masks;         /* 모든 클라이언트가 고른 이벤트 */
+    long your_event_mask;         /* 내가 고른 이벤트 */
+    long do_not_propagate_mask;   /* 전파하지 않을 이벤트 */
+    Bool override_redirect;       /* override-redirect 여부 */
+    Screen *screen;               /* 해당 화면을 가리키는 포인터 */
+} XWindowAttributes;</code></pre>
+<p>멤버의 뜻은 다음과 같다.</p>
+<ul>
+<li><code>x</code>, <code>y</code>: 테두리 바깥쪽 왼쪽 위 모서리 위치. <b>부모 윈도 원점 기준</b>이다. 화면 기준 좌표가 아니다.</li>
+<li><code>width</code>, <code>height</code>: 테두리를 뺀 안쪽 크기. <code>border_width</code>: 테두리 두께(픽셀).</li>
+<li><code>depth</code>: 픽셀당 비트 수. <code>visual</code>: 화면의 <code>Visual</code> 구조체 포인터. <code>root</code>: 윈도가 있는 화면의 루트 윈도.</li>
+<li><code>class</code>: <code>InputOutput</code> 또는 <code>InputOnly</code>.</li>
+<li><code>bit_gravity</code>: <code>ForgetGravity</code>, <code>NorthWestGravity</code>, <code>NorthGravity</code>, <code>NorthEastGravity</code>, <code>WestGravity</code>, <code>EastGravity</code>, <code>SouthWestGravity</code>, <code>SouthGravity</code>, <code>SouthEastGravity</code>, <code>StaticGravity</code> 중 하나(중력 개념은 3.2.3절).</li>
+<li><code>win_gravity</code>: <code>UnmapGravity</code>, <code>NorthWestGravity</code>, <code>NorthGravity</code>, <code>NorthEastGravity</code>, <code>WestGravity</code>, <code>CenterGravity</code>, <code>EastGravity</code>, <code>SouthWestGravity</code>, <code>SouthGravity</code>, <code>SouthEastGravity</code>, <code>StaticGravity</code> 중 하나.</li>
+<li><code>backing_store</code>: 서버가 윈도 내용을 어떻게 보관할지(<code>WhenMapped</code>, <code>Always</code>, <code>NotUseful</code>). <code>backing_planes</code>는 보관해야 할 플레인을 1로 표시한 비트, <code>backing_pixel</code>은 그 밖의 플레인에 쓸 값이다.</li>
+<li><code>save_under</code>: <code>True</code>/<code>False</code>.</li>
+<li><code>colormap</code>: 컬러맵 ID 또는 <code>None</code>. <code>map_installed</code>: 그 컬러맵이 지금 설치돼 있는지.</li>
+<li><code>map_state</code>: <code>IsUnmapped</code>, <code>IsUnviewable</code>, <code>IsViewable</code>. <code>IsUnviewable</code>은 "이 윈도는 맵됐지만 조상 중 하나가 맵되지 않아 안 보이는" 상태다.</li>
+<li><code>all_event_masks</code>: 모든 클라이언트가 이 윈도에 고른 이벤트 마스크의 OR. <code>your_event_mask</code>: 묻는 클라이언트 자신이 고른 마스크. <code>do_not_propagate_mask</code>: 전파하지 않을 이벤트 집합.</li>
+<li><code>override_redirect</code>: <code>True</code>면 윈도 매니저의 구조 제어를 우회하는 윈도(팝업 메뉴 등)다. 윈도 매니저는 이 값이 <code>True</code>인 윈도를 무시해야 한다.</li>
+<li><code>screen</code>: 해당 <code>Screen</code> 포인터. 루트 윈도를 하나하나 비교해 어느 화면인지 찾을 필요가 없게 해 준다.</li>
+</ul>
+<p><code>BadDrawable</code>, <code>BadWindow</code> 오류가 날 수 있다.</p>
+<div class="tip">윈도 매니저가 있는 환경에서는 최상위 윈도가 윈도 매니저의 프레임 윈도 안에 다시 붙는(reparent) 경우가 많다. 그러면 <code>x</code>, <code>y</code>는 프레임 안에서의 위치(보통 0 근처)가 나온다. 화면 위 실제 위치가 필요하면 아래의 <code>XTranslateCoordinates</code>로 루트 기준 좌표를 구한다.</div>
+
+<h4>XGetGeometry</h4>
+<pre><code>Status XGetGeometry(Display *display, Drawable d, Window *root_return,
+                    int *x_return, int *y_return,
+                    unsigned int *width_return, unsigned int *height_return,
+                    unsigned int *border_width_return, unsigned int *depth_return);</code></pre>
+<p>드로어블(윈도 또는 픽스맵)의 루트와 현재 지오메트리를 얻는다. <code>XGetWindowAttributes</code>보다 가볍고, 픽스맵에도 쓸 수 있다는 점이 다르다.</p>
+<ul>
+<li>윈도면 <code>x</code>, <code>y</code>는 부모 원점 기준 테두리 바깥 왼쪽 위, 너비·높이는 테두리를 뺀 안쪽 크기다.</li>
+<li>픽스맵이면 <code>x</code>, <code>y</code>와 <code>border_width</code>는 언제나 0이다.</li>
+<li><code>InputOnly</code> 윈도를 넘겨도 된다. 오류는 <code>BadDrawable</code>.</li>
+</ul>
+<pre><code>Window root; int x, y; unsigned int w, h, bw, depth;
+XGetGeometry(dpy, pixmap, &amp;root, &amp;x, &amp;y, &amp;w, &amp;h, &amp;bw, &amp;depth);
+printf("픽스맵 %ux%u, 깊이 %u\n", w, h, depth);</code></pre>
+<div class="tip">픽스맵 크기를 따로 기억하지 않았을 때 <code>XGetGeometry</code>로 알아낼 수 있다. 다만 왕복 요청이므로 그리기 루프 안에서 매번 부르지 말고, 값을 저장해 두고 쓴다.</div>
+
+<h3>4.2 화면 좌표 변환 (Translating Screen Coordinates)</h3>
+<p>한 윈도의 좌표를 다른 윈도의 좌표로 바꾸거나, 포인터가 어느 윈도 위에 있는지 알아야 할 때가 있다. 클라이언트가 직접 계산하려면 조상 윈도들의 위치를 하나씩 물어 더해야 하는데, 그 사이에 윈도가 움직이면 답이 틀린다(경쟁 조건). 그래서 <code>XTranslateCoordinates</code>와 <code>XQueryPointer</code>는 계산을 <b>서버에게 맡겨</b> 한 번에 정확한 답을 받는다.</p>
+
+<h4>XTranslateCoordinates</h4>
+<pre><code>Bool XTranslateCoordinates(Display *display, Window src_w, Window dest_w,
+                           int src_x, int src_y,
+                           int *dest_x_return, int *dest_y_return,
+                           Window *child_return);</code></pre>
+<p><code>src_w</code> 기준 좌표 (<code>src_x</code>, <code>src_y</code>)를 <code>dest_w</code> 기준 좌표로 바꾼다.</p>
+<ul>
+<li><code>True</code>를 돌려주면 변환된 좌표가 <code>dest_x_return</code>, <code>dest_y_return</code>에 들어간다.</li>
+<li><code>False</code>면 두 윈도가 서로 다른 화면에 있다는 뜻이고, 결과 좌표는 0이다.</li>
+<li>그 점이 <code>dest_w</code>의 맵된 자식 안에 있으면 그 자식이 <code>child_return</code>에, 아니면 <code>None</code>이 들어간다.</li>
+<li>오류: <code>BadWindow</code>.</li>
+</ul>
+<pre><code>/* 내 윈도의 (0,0)이 화면 어디에 있는지 */
+int sx, sy; Window child;
+XTranslateCoordinates(dpy, win, DefaultRootWindow(dpy), 0, 0, &amp;sx, &amp;sy, &amp;child);
+printf("화면 위치: %d,%d\n", sx, sy);</code></pre>
+
+<h4>XQueryPointer</h4>
+<pre><code>Bool XQueryPointer(Display *display, Window w, Window *root_return,
+                   Window *child_return, int *root_x_return, int *root_y_return,
+                   int *win_x_return, int *win_y_return,
+                   unsigned int *mask_return);</code></pre>
+<p>포인터(마우스)가 지금 어디 있는지, 그리고 버튼·수정 키가 어떤 상태인지 묻는다.</p>
+<ul>
+<li><code>root_return</code>, <code>root_x_return</code>, <code>root_y_return</code>: 포인터가 논리적으로 올라가 있는 루트 윈도와 그 기준 좌표. 이것은 언제나 채워진다.</li>
+<li><code>False</code>면 포인터가 <code>w</code>와 다른 화면에 있다. 이때 <code>child_return</code>은 <code>None</code>, <code>win_x/y</code>는 0이다.</li>
+<li><code>True</code>면 <code>win_x/y</code>는 <code>w</code> 기준 좌표이고, <code>child_return</code>은 포인터를 담은 <code>w</code>의 자식(없으면 <code>None</code>)이다.</li>
+<li><code>mask_return</code>: 마우스 버튼과 수정 키(Shift, Control 등)의 논리 상태를 비트 OR로 돌려준다(<code>Button1Mask</code>, <code>ShiftMask</code> 같은 값).</li>
+<li>오류: <code>BadWindow</code>.</li>
+</ul>
+<div class="tip">여기서 "논리 상태"는 Xlib에서 보이는 상태다. 장치 이벤트 처리가 얼어 있으면(12.1절의 grab 관련) 실제 물리 상태보다 늦을 수 있다. 또 마우스를 따라가려고 <code>XQueryPointer</code>를 루프에서 계속 부르는 것은 왕복 낭비다. 보통은 <code>PointerMotionMask</code>로 <code>MotionNotify</code> 이벤트를 받는 편이 낫다.</div>
+
+<h3>4.3 프로퍼티와 아톰 (Properties and Atoms)</h3>
+
+<h4>프로퍼티란</h4>
+<p><b>프로퍼티</b>는 윈도에 붙이는 "이름 있고 타입 있는 데이터"다. 윈도 제목, 크기 힌트처럼 미리 정해진 프로퍼티가 있고, 사용자가 아무 정보나 새로 정의해 윈도에 달 수도 있다. 비유하면, 서버에 있는 각 윈도마다 작은 딕셔너리가 붙어 있고 "키 = 이름, 값 = (타입, 형식, 바이트 배열)"이 저장되는 셈이다.</p>
+<ul>
+<li>이름: ISO Latin-1 문자열. 각 이름마다 고유한 정수 식별자인 <b>아톰(atom)</b>이 대응된다.</li>
+<li>타입: 문자열인지 정수인지 등. 타입도 아톰으로 나타내므로 새 타입을 마음대로 만들 수 있다.</li>
+<li>한 프로퍼티 이름에는 한 번에 한 타입의 데이터만 붙는다.</li>
+<li>형식(format): 데이터를 8비트, 16비트, 32비트 단위 중 무엇으로 볼지. 서버는 이 정보로 클라이언트가 기대하는 바이트 순서로 바꿔서 건네준다. 리틀엔디안 PC와 빅엔디안 서버가 섞여 있어도 정수가 깨지지 않는 이유가 이것이다.</li>
+</ul>
+<p>왜 문자열 대신 아톰을 쓰는가? 효율 때문이다. 요청마다 "WM_NAME" 같은 문자열을 보내고 비교하는 대신, 한 번 문자열을 아톰(32비트 정수)으로 바꿔 두고 이후에는 정수만 주고받는다. 이름 → 아톰 변환은 <code>XInternAtom</code>이 한다.</p>
+<p>복잡한 구조의 프로퍼티를 직접 정의하면, 그 인코딩·디코딩은 직접 짜야 하고 이식성을 신경 써야 한다(라이브러리 확장 작성법은 부록 C).</p>
+
+<h4>미리 정의된 아톰</h4>
+<p>자주 쓰는 이름은 서버에 미리 정의돼 있고, 그 아톰 상수는 <code>&lt;X11/Xatom.h&gt;</code>에 있다. 사용자 심벌과 겹치지 않도록 이름 앞에 <code>XA_</code>가 붙는다(예: <code>XA_WM_NAME</code>, <code>XA_STRING</code>, <code>XA_PRIMARY</code>). 이런 미리 정의된 프로퍼티를 다루는 편의 함수는 14장에 나온다.</p>
+<p>핵심 프로토콜은 이 이름들에 아무 의미도 부여하지 않는다. 의미는 ICCCM(Inter-Client Communication Conventions Manual), XLFD(X Logical Font Description Conventions) 같은 별도 표준이 정한다. 즉 서버는 "WM_NAME"이 제목이라는 것을 모른다. 그저 바이트를 저장할 뿐이고, 윈도 매니저와 앱이 약속에 따라 읽고 쓴다.</p>
+<p>아톰은 프로토콜 안에서 다섯 가지 이름 공간에 쓰인다. 같은 아톰이 각 공간에서 다른 뜻으로 해석될 수 있다.</p>
+<table>
+<tr><th>이름 공간</th><th>미리 정의된 것</th></tr>
+<tr><td>셀렉션(Selections)</td><td><code>PRIMARY</code>, <code>SECONDARY</code></td></tr>
+<tr><td>프로퍼티 이름</td><td><code>CUT_BUFFER0</code>~<code>CUT_BUFFER7</code>, <code>RESOURCE_MANAGER</code>, <code>RGB_BEST_MAP</code>, <code>RGB_BLUE_MAP</code>, <code>RGB_DEFAULT_MAP</code>, <code>RGB_GRAY_MAP</code>, <code>RGB_GREEN_MAP</code>, <code>RGB_RED_MAP</code>, <code>WM_CLASS</code>, <code>WM_CLIENT_MACHINE</code>, <code>WM_COLORMAP_WINDOWS</code>, <code>WM_COMMAND</code>, <code>WM_HINTS</code>, <code>WM_ICON_NAME</code>, <code>WM_ICON_SIZE</code>, <code>WM_NAME</code>, <code>WM_NORMAL_HINTS</code>, <code>WM_PROTOCOLS</code>, <code>WM_STATE</code>, <code>WM_TRANSIENT_FOR</code>, <code>WM_ZOOM_HINTS</code></td></tr>
+<tr><td>프로퍼티 타입</td><td><code>ARC</code>, <code>ATOM</code>, <code>BITMAP</code>, <code>CARDINAL</code>, <code>COLORMAP</code>, <code>CURSOR</code>, <code>DRAWABLE</code>, <code>FONT</code>, <code>INTEGER</code>, <code>PIXMAP</code>, <code>POINT</code>, <code>RGB_COLOR_MAP</code>, <code>RECTANGLE</code>, <code>STRING</code>, <code>VISUALID</code>, <code>WINDOW</code>, <code>WM_HINTS</code>, <code>WM_SIZE_HINTS</code></td></tr>
+<tr><td>폰트 프로퍼티</td><td><code>MIN_SPACE</code>, <code>NORM_SPACE</code>, <code>MAX_SPACE</code>, <code>END_SPACE</code>, <code>SUPERSCRIPT_X/Y</code>, <code>SUBSCRIPT_X/Y</code>, <code>UNDERLINE_POSITION</code>, <code>UNDERLINE_THICKNESS</code>, <code>STRIKEOUT_ASCENT/DESCENT</code>, <code>ITALIC_ANGLE</code>, <code>X_HEIGHT</code>, <code>QUAD_WIDTH</code>, <code>WEIGHT</code>, <code>POINT_SIZE</code>, <code>RESOLUTION</code>, <code>COPYRIGHT</code>, <code>NOTICE</code>, <code>FONT_NAME</code>, <code>FAMILY_NAME</code>, <code>FULL_NAME</code>, <code>CAP_HEIGHT</code> (자세한 것은 8.5절)</td></tr>
+<tr><td><code>ClientMessage</code> 이벤트의 타입</td><td>서버에 내장된 것 없음</td></tr>
+</table>
+<div class="tip">요즘 데스크톱에서 많이 쓰는 <code>_NET_WM_NAME</code>, <code>UTF8_STRING</code>, <code>CLIPBOARD</code>, <code>TARGETS</code> 같은 이름은 <code>Xatom.h</code>에 없다. 이것들은 ICCCM이나 EWMH(freedesktop의 Extended Window Manager Hints) 같은 관례가 정한 이름이라 <code>XInternAtom</code>으로 직접 얻어야 한다.</div>
+
+<h4>XInternAtom</h4>
+<pre><code>Atom XInternAtom(Display *display, char *atom_name, Bool only_if_exists);</code></pre>
+<p>이름 문자열에 해당하는 아톰을 돌려준다.</p>
+<ul>
+<li><code>only_if_exists</code>가 <code>False</code>면 아톰이 없을 때 새로 만든다. <code>True</code>면 만들지 않고, 없으면 <code>None</code>을 돌려준다.</li>
+<li>대소문자를 구별한다. "thing", "Thing", "thinG"은 모두 다른 아톰이다.</li>
+<li>이름이 Host Portable Character Encoding(기본 ASCII 정도로 생각하면 된다)이 아니면 결과는 구현마다 다르다.</li>
+<li>한 번 만든 아톰은 만든 클라이언트가 끊겨도 남는다. 서버에 붙은 마지막 연결이 끊길 때(서버 리셋)에야 사라진다.</li>
+<li>오류: <code>BadAlloc</code>, <code>BadValue</code>.</li>
+</ul>
+<div class="tip"><code>only_if_exists = True</code>는 "그런 아톰이 없으면 그 프로퍼티도 당연히 없다"는 것을 확인할 때 유용하다. 예를 들어 <code>_NET_WM_NAME</code> 아톰조차 없다면 EWMH를 아는 클라이언트가 하나도 없었다는 뜻이다. 반대로 내가 쓸 프로퍼티라면 <code>False</code>로 만들어야 한다.</div>
+
+<h4>XInternAtoms</h4>
+<pre><code>Status XInternAtoms(Display *display, char **names, int count,
+                    Bool only_if_exists, Atom *atoms_return);</code></pre>
+<p>여러 이름을 한꺼번에 아톰으로 바꾼다. 결과는 호출자가 준비한 <code>atoms_return</code> 배열에 들어간다. 각 이름마다 <code>XInternAtom</code>을 부른 것과 같지만, 왕복 횟수를 줄여 준다. 모든 이름에 대해 아톰을 얻으면 0이 아닌 값, 아니면 0을 돌려준다. 오류: <code>BadAlloc</code>, <code>BadValue</code>.</p>
+<pre><code>char *names[] = { "UTF8_STRING", "_NET_WM_NAME", "CLIPBOARD", "TARGETS" };
+Atom a[4];
+XInternAtoms(dpy, names, 4, False, a);
+Atom UTF8_STRING = a[0], NET_WM_NAME = a[1], CLIPBOARD = a[2], TARGETS = a[3];</code></pre>
+<div class="tip">프로그램 시작 때 필요한 아톰을 <code>XInternAtoms</code>로 한 번에 얻어 전역에 저장해 두는 것이 정석이다. 이벤트 처리 중에 <code>XInternAtom</code>을 매번 부르면 그때마다 왕복이 생긴다.</div>
+
+<h4>XGetAtomName</h4>
+<pre><code>char *XGetAtomName(Display *display, Atom atom);</code></pre>
+<p>아톰에 해당하는 이름 문자열을 돌려준다. 디버깅할 때 "이 프로퍼티 타입이 뭐지?"를 사람이 읽을 수 있게 출력하는 데 특히 쓸모 있다. 결과 문자열은 <code>XFree</code>로 푼다. 없는 아톰이면 <code>BadAtom</code> 오류가 난다.</p>
+
+<h4>XGetAtomNames</h4>
+<pre><code>Status XGetAtomNames(Display *display, Atom *atoms, int count, char **names_return);</code></pre>
+<p>여러 아톰의 이름을 한 번에 얻는다. 이름들은 호출자가 준비한 <code>names_return</code> 배열에 들어간다(각 문자열은 하나씩 <code>XFree</code>). 모든 아톰의 이름을 얻으면 0이 아닌 값을 돌려준다. 오류: <code>BadAtom</code>.</p>
+
+<h3>4.4 윈도 프로퍼티 읽기와 바꾸기 (Obtaining and Changing Window Properties)</h3>
+<p>모든 윈도에 프로퍼티 목록을 달 수 있다. 각 프로퍼티는 이름, 타입, 값을 가지고, 값은 8·16·32비트 단위의 배열이다. 해석은 클라이언트 몫이다. C 쪽에서는 8비트를 <code>char</code>, 16비트를 <code>short</code>, <b>32비트를 <code>long</code></b>으로 나타낸다. 이 마지막 규칙이 가장 흔한 함정이다(아래 팁 참고). 클라이언트 간 통신용 편의 함수는 14장에 따로 있다.</p>
+
+<h4>XGetWindowProperty</h4>
+<pre><code>int XGetWindowProperty(Display *display, Window w, Atom property,
+                       long long_offset, long long_length, Bool delete,
+                       Atom req_type, Atom *actual_type_return,
+                       int *actual_format_return, unsigned long *nitems_return,
+                       unsigned long *bytes_after_return,
+                       unsigned char **prop_return);</code></pre>
+<p>윈도 <code>w</code>의 프로퍼티 하나를 읽어 타입, 형식, 값을 돌려준다. 인자가 많지만 하나씩 보면 단순하다.</p>
+<ul>
+<li><code>property</code>: 읽을 프로퍼티 이름(아톰).</li>
+<li><code>long_offset</code>: 어디서부터 읽을지. <b>32비트(4바이트) 단위</b>다.</li>
+<li><code>long_length</code>: 얼마나 읽을지. 역시 <b>32비트 단위</b>다. 전부 읽고 싶으면 넉넉히 큰 값을 준다.</li>
+<li><code>delete</code>: <code>True</code>면 다 읽은 뒤 프로퍼티를 지운다(아래 조건 참고).</li>
+<li><code>req_type</code>: 기대하는 타입 아톰, 또는 아무 타입이나 받는 <code>AnyPropertyType</code>.</li>
+<li><code>actual_type_return</code>, <code>actual_format_return</code>: 실제 타입과 형식(8/16/32).</li>
+<li><code>nitems_return</code>: 돌려받은 항목 수. 바이트 수가 아니라 <b>형식 단위 항목 수</b>다.</li>
+<li><code>bytes_after_return</code>: 다 못 읽고 남은 바이트 수.</li>
+<li><code>prop_return</code>: 데이터 포인터. <code>XFree</code>로 푼다.</li>
+</ul>
+<p>결과는 세 경우로 나뉜다.</p>
+<table>
+<tr><th>상황</th><th>actual_type</th><th>actual_format</th><th>bytes_after</th><th>nitems / delete</th></tr>
+<tr><td>프로퍼티가 없음</td><td><code>None</code></td><td>0</td><td>0</td><td>항목 없음, delete 무시</td></tr>
+<tr><td>있지만 req_type과 타입이 다름</td><td>실제 타입</td><td>실제 형식(0 아님)</td><td>프로퍼티 전체 길이(바이트)</td><td>항목 없음, delete 무시</td></tr>
+<tr><td>타입이 맞거나 <code>AnyPropertyType</code></td><td>실제 타입</td><td>실제 형식(0 아님)</td><td>남은 바이트 A</td><td>읽은 항목 수</td></tr>
+</table>
+<p>세 번째 경우 서버는 다음처럼 계산한다.</p>
+<pre><code>N = 저장된 프로퍼티의 실제 길이(바이트, 형식이 16이나 32여도 바이트로 셈)
+I = 4 * long_offset
+T = N - I
+L = MINIMUM(T, 4 * long_length)
+A = N - (I + L)</code></pre>
+<p>돌려받는 값은 바이트 인덱스 I(0부터)에서 시작하는 L바이트이고, <code>bytes_after_return</code>은 A다. <code>long_offset</code>이 너무 커서 L이 음수가 되면 <code>BadValue</code> 오류가 난다. 즉 큰 프로퍼티는 offset을 늘려 가며 여러 번 나눠 읽을 수 있고, A가 0이 되면 끝까지 읽은 것이다.</p>
+<p>그 밖의 규칙:</p>
+<ul>
+<li>형식이 8이면 데이터는 <code>char</code> 배열, 16이면 <code>short</code> 배열, 32면 <code>long</code> 배열로 캐스팅해 읽는다.</li>
+<li>Xlib는 길이가 0이어도 <code>prop_return</code> 끝에 <b>항상 1바이트를 더 할당해 0을 넣는다</b>. 그래서 문자열 프로퍼티는 따로 복사하지 않고 바로 C 문자열로 쓸 수 있다.</li>
+<li><code>delete</code>가 <code>True</code>이고 <code>bytes_after_return</code>이 0이면(끝까지 다 읽었으면) 프로퍼티를 지우고 <code>PropertyNotify</code> 이벤트를 발생시킨다. 덜 읽었으면 지우지 않는다.</li>
+<li>성공하면 <code>Success</code>를 돌려준다. 오류: <code>BadAtom</code>, <code>BadValue</code>, <code>BadWindow</code>.</li>
+</ul>
+
+<h4>예제: _NET_WM_NAME(창 제목) 읽기</h4>
+<p>요즘 창 제목은 보통 두 곳에 있다. 오래된 <code>WM_NAME</code>(타입 <code>STRING</code>, Latin-1, 또는 <code>COMPOUND_TEXT</code>)과, EWMH가 정한 <code>_NET_WM_NAME</code>(타입 <code>UTF8_STRING</code>, 형식 8)이다. 한글 제목은 대개 <code>_NET_WM_NAME</code>에 제대로 들어 있으므로 먼저 이것을 읽고, 없으면 <code>WM_NAME</code>으로 돌아가는 것이 일반적이다. 아래 예제는 그 흐름을 보여 준다.</p>
+<pre><code>/* title.c — cc title.c -lX11 ; 사용법: ./title 0x1234567 */
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;X11/Xlib.h&gt;
+#include &lt;X11/Xatom.h&gt;
+
+/* 프로퍼티 전체를 읽어 돌려준다. 실패하면 NULL. 결과는 XFree로 푼다. */
+static unsigned char *get_prop(Display *dpy, Window w, Atom prop, Atom want,
+                               Atom *type, int *format, unsigned long *n)
+{
+    unsigned char *data = NULL;
+    unsigned long after;
+    int rc = XGetWindowProperty(dpy, w, prop,
+                                0, 1024 * 1024,   /* offset 0부터 최대 4MB(32비트 단위) */
+                                False,            /* 지우지 않는다 */
+                                want,             /* 기대 타입 */
+                                type, format, n, &amp;after, &amp;data);
+    if (rc != Success) return NULL;
+    if (*type == None) {                 /* 프로퍼티가 없음 */
+        if (data) XFree(data);
+        return NULL;
+    }
+    if (want != AnyPropertyType &amp;&amp; *type != want) {   /* 타입이 다름 */
+        if (data) XFree(data);
+        return NULL;
+    }
+    return data;
+}
+
+int main(int argc, char **argv)
+{
+    if (argc &lt; 2) return 1;
+    Display *dpy = XOpenDisplay(NULL);
+    if (!dpy) return 1;
+    Window w = (Window)strtoul(argv[1], NULL, 0);
+
+    Atom NET_WM_NAME = XInternAtom(dpy, "_NET_WM_NAME", False);
+    Atom UTF8_STRING = XInternAtom(dpy, "UTF8_STRING", False);
+
+    Atom type; int format; unsigned long n;
+    unsigned char *s = get_prop(dpy, w, NET_WM_NAME, UTF8_STRING, &amp;type, &amp;format, &amp;n);
+    if (s &amp;&amp; format == 8) {
+        printf("_NET_WM_NAME: %s (%lu바이트)\n", s, n);  /* 끝에 0이 붙어 있어 바로 출력 가능 */
+        XFree(s);
+    } else {
+        if (s) XFree(s);
+        /* 예전 방식: WM_NAME (아무 타입이나 받아 본다) */
+        s = get_prop(dpy, w, XA_WM_NAME, AnyPropertyType, &amp;type, &amp;format, &amp;n);
+        if (s) {
+            char *tn = XGetAtomName(dpy, type);
+            printf("WM_NAME (%s): %s\n", tn, s);
+            XFree(tn);
+            XFree(s);
+        } else {
+            printf("제목 없음\n");
+        }
+    }
+    XCloseDisplay(dpy);
+    return 0;
+}</code></pre>
+<p>읽은 다음 데이터가 정말 그 타입·형식인지 확인하는 부분이 중요하다. 프로퍼티는 아무 클라이언트나 쓸 수 있으므로, 이상한 타입이 들어 있어도 프로그램이 죽지 않아야 한다. 또 최상위 윈도 ID를 넘겨야 한다는 점에 주의한다. 윈도 매니저의 프레임 윈도에는 보통 제목 프로퍼티가 없다(<code>xwininfo</code>나 <code>xprop</code>로 클릭해 얻은 ID를 쓰면 편하다).</p>
+
+<h4>예제: 형식 32 데이터 읽기 (_NET_WM_PID)</h4>
+<pre><code>Atom pid_atom = XInternAtom(dpy, "_NET_WM_PID", True);
+Atom type; int format; unsigned long n, after;
+unsigned char *data = NULL;
+if (pid_atom != None &amp;&amp;
+    XGetWindowProperty(dpy, w, pid_atom, 0, 1, False, XA_CARDINAL,
+                       &amp;type, &amp;format, &amp;n, &amp;after, &amp;data) == Success
+    &amp;&amp; type == XA_CARDINAL &amp;&amp; format == 32 &amp;&amp; n == 1) {
+    unsigned long pid = ((unsigned long *)data)[0];   /* uint32_t*가 아니라 long* */
+    printf("PID %lu\n", pid);
+}
+if (data) XFree(data);</code></pre>
+<div class="tip"><b>형식 32 = C의 <code>long</code></b>이다. 64비트 리눅스에서 <code>long</code>은 8바이트이므로, Xlib는 32비트 값 하나를 8바이트 <code>long</code> 하나에 담아 돌려준다. <code>uint32_t *</code>나 <code>int *</code>로 캐스팅하면 값이 하나 건너 하나씩 0으로 보이는 버그가 난다. 쓸 때(<code>XChangeProperty</code>)도 마찬가지로 <code>long</code> 배열을 넘겨야 한다. 또 <code>long_offset</code>과 <code>long_length</code>는 언제나 4바이트 단위이고, 이것은 C의 <code>long</code> 크기와 상관없다.</div>
+<div class="tip"><code>nitems_return</code>은 항목 수, <code>bytes_after_return</code>은 바이트 수다. 단위가 서로 다르다. 그리고 타입이 다를 때는 <code>bytes_after_return</code>에 프로퍼티 전체 바이트 길이가 들어오므로, 이를 이용해 "타입부터 알아보고 다시 읽기"를 할 수도 있다(처음엔 <code>long_length = 0</code>, <code>AnyPropertyType</code>로 길이만 알아낸다).</div>
+
+<h4>XListProperties</h4>
+<pre><code>Atom *XListProperties(Display *display, Window w, int *num_prop_return);</code></pre>
+<p>윈도에 붙은 모든 프로퍼티 이름(아톰) 배열을 돌려준다. 하나도 없으면 NULL이다. 결과는 <code>XFree</code>로 푼다. 오류: <code>BadWindow</code>. <code>XGetAtomName</code>과 함께 쓰면 간단한 <code>xprop</code>를 만들 수 있다.</p>
+<pre><code>int np; Atom *props = XListProperties(dpy, w, &amp;np);
+for (int i = 0; i &lt; np; i++) {
+    char *name = XGetAtomName(dpy, props[i]);
+    printf("%s\n", name);
+    XFree(name);
+}
+if (props) XFree(props);</code></pre>
+
+<h4>XChangeProperty</h4>
+<pre><code>XChangeProperty(Display *display, Window w, Atom property, Atom type,
+                int format, int mode, unsigned char *data, int nelements);</code></pre>
+<p>윈도의 프로퍼티를 쓰거나 바꾼다. 바꾸면 서버가 그 윈도에 <code>PropertyNotify</code> 이벤트를 발생시킨다.</p>
+<ul>
+<li><code>type</code>: 프로퍼티 타입. 서버는 이 값을 해석하지 않고 나중에 <code>XGetWindowProperty</code>로 읽는 쪽에 그대로 돌려줄 뿐이다.</li>
+<li><code>format</code>: 8, 16, 32 중 하나. 서버가 바이트 순서를 바르게 바꾸기 위해 필요하다. 16이나 32일 때는 데이터 포인터를 <code>(unsigned char *)</code>로 명시적으로 캐스팅해 넘긴다.</li>
+<li><code>mode</code>:
+  <ul>
+  <li><code>PropModeReplace</code>: 이전 값을 버리고 새 데이터를 저장한다.</li>
+  <li><code>PropModePrepend</code> / <code>PropModeAppend</code>: 기존 데이터 앞/뒤에 붙인다. 이때 타입과 형식이 기존 값과 같아야 하고, 다르면 <code>BadMatch</code>. 프로퍼티가 아직 없으면 올바른 타입·형식의 빈 데이터가 있는 것으로 친다.</li>
+  </ul></li>
+<li><code>nelements</code>: 바이트 수가 아니라 <b>형식 단위 원소 수</b>다.</li>
+<li>형식 8이면 <code>char</code> 배열, 16이면 <code>short</code> 배열, 32면 <code>long</code> 배열이어야 한다.</li>
+</ul>
+<p>프로퍼티의 수명은 그것을 쓴 클라이언트와 무관하다. 명시적으로 지우거나, 윈도가 없어지거나, 서버가 리셋될 때까지 남는다(연결 종료 시 무엇이 남는지는 2.6절). 최대 크기는 서버마다 다르고 서버의 남은 메모리에 따라 바뀔 수 있으며, 공간이 모자라면 <code>BadAlloc</code>이 난다. 오류: <code>BadAlloc</code>, <code>BadAtom</code>, <code>BadMatch</code>, <code>BadValue</code>, <code>BadWindow</code>.</p>
+<pre><code>/* UTF-8 제목 설정 (EWMH) */
+const char *title = "조이봉방 테스트";
+XChangeProperty(dpy, win, NET_WM_NAME, UTF8_STRING, 8, PropModeReplace,
+                (unsigned char *)title, strlen(title));
+
+/* 형식 32: long 배열을 넘긴다 */
+long pid = getpid();
+XChangeProperty(dpy, win, XInternAtom(dpy, "_NET_WM_PID", False), XA_CARDINAL,
+                32, PropModeReplace, (unsigned char *)&amp;pid, 1);</code></pre>
+<div class="tip"><code>XChangeProperty</code>는 응답을 기다리지 않는 요청이라 바로 돌아온다. 요청은 출력 버퍼에 쌓여 있다가 나중에 보내지므로, 다른 프로그램이 곧바로 보길 원하면 <code>XFlush</code>를 부른다. 오류도 나중에 비동기로 도착한다.</div>
+
+<h4>XRotateWindowProperties</h4>
+<pre><code>XRotateWindowProperties(Display *display, Window w, Atom properties[],
+                        int num_prop, int npositions);</code></pre>
+<p>여러 프로퍼티의 값을 고리처럼 돌린다. 배열의 이름을 0부터 번호 매기고 개수를 N이라 하면, 이름 I에 붙어 있던 값이 이름 (I + npositions) mod N으로 옮겨 간다. 양수면 오른쪽, 음수면 왼쪽으로 돈다. npositions mod N이 0이 아니면 배열 순서대로 각 프로퍼티에 <code>PropertyNotify</code>가 발생한다. 같은 아톰이 두 번 나오거나 윈도에 없는 프로퍼티가 있으면 <code>BadMatch</code>이고, <code>BadAtom</code>이나 <code>BadMatch</code>가 나면 아무것도 바뀌지 않는다. 원래는 <code>CUT_BUFFER0</code>~<code>7</code>을 돌리는 용도로 쓰였다. 자주 쓰지 않아 요약만 한다. 오류: <code>BadAtom</code>, <code>BadMatch</code>, <code>BadWindow</code>.</p>
+
+<h4>XDeleteProperty</h4>
+<pre><code>XDeleteProperty(Display *display, Window w, Atom property);</code></pre>
+<p>프로퍼티를 지운다. 그 윈도에 프로퍼티가 있었을 때만 지우고 <code>PropertyNotify</code>를 발생시킨다. 없었다면 아무 일도 없고 이벤트도 없다. 오류: <code>BadAtom</code>, <code>BadWindow</code>.</p>
+
+<div class="tip"><b>PropertyNotify로 변화 지켜보기.</b> 다른 앱의 프로퍼티(예: 다른 창의 제목)가 바뀌는 것을 알고 싶으면 그 윈도에 <code>XSelectInput(dpy, w, PropertyChangeMask)</code>를 걸어 둔다. 그러면 <code>PropertyNotify</code> 이벤트의 <code>atom</code>, <code>state</code>(<code>PropertyNewValue</code>/<code>PropertyDelete</code>)로 무엇이 바뀌었는지 알 수 있다. 이 이벤트에는 서버 <code>time</code>도 들어 있어서, 셀렉션에 쓸 타임스탬프를 얻는 데도 쓰인다.</div>
+
+<h3>4.5 셀렉션 (Selections)</h3>
+
+<h4>셀렉션은 무엇이고 왜 이렇게 생겼나</h4>
+<p>셀렉션은 앱끼리 데이터를 주고받는 방법 중 하나로, 복사·붙여넣기가 바로 이것으로 돌아간다. 셀렉션은 프로퍼티 메커니즘을 이용하므로 아무 타입의 데이터든 주고받을 수 있고, 어떤 타입으로 받을지 <b>협상</b>할 수 있다.</p>
+<p>셀렉션은 "간접 프로퍼티이면서 타입이 동적인 것"이라고 생각하면 된다. 데이터가 서버에 저장되는 것이 아니라 <b>소유자(owner)인 클라이언트가 가지고 있다</b>. 서버는 "지금 PRIMARY의 주인은 누구인가"만 기억하고, 누군가 내용을 달라고 하면 그 요청을 주인에게 넘긴다. 그래서 10MB짜리 이미지를 복사해도 실제로 붙여넣기 전까지는 아무 데이터도 오가지 않고, 요청하는 쪽이 원하는 형식(텍스트, HTML, PNG...)으로 그때그때 변환해 줄 수 있다.</p>
+<p>셀렉션은 전역이다. 특정 윈도 계층이나 특정 클라이언트들에 속한 것이 아니라 "사용자의 것"이고, 관리만 클라이언트가 한다. 셀렉션을 지원하는 앱은 보통 선택 영역을 강조 표시하는데, 다른 앱이 셀렉션을 가져가면 강조를 풀어야 한다. 그래서 소유권을 잃을 때 알림(<code>SelectionClear</code>)이 온다.</p>
+<p>내용을 요청할 때는 <b>타깃(target) 타입</b>을 지정한다. 타깃으로 전송 표현을 정할 수 있다. 예를 들어 셀렉션이 이미지라면 XY 형식으로 받을지 Z 형식으로 받을지를 타깃으로 고를 수 있다. 내용의 종류를 고를 수도 있다. 문단을 선택했을 때 본문 텍스트가 아니라 "모양"(폰트, 줄 간격, 들여쓰기)을 달라고 할 수도 있다. 프로토콜은 타깃의 의미를 제한하지 않는다. 실제 관례(<code>TARGETS</code>, <code>UTF8_STRING</code>, <code>STRING</code> 등)는 ICCCM이 정한다.</p>
+
+<h4>XSetSelectionOwner</h4>
+<pre><code>XSetSelectionOwner(Display *display, Atom selection, Window owner, Time time);</code></pre>
+<p>셀렉션의 소유자와 마지막 변경 시각을 바꾼다.</p>
+<ul>
+<li><code>owner</code>: 소유자로 삼을 윈도, 또는 소유권을 버릴 때 <code>None</code>.</li>
+<li><code>time</code>: 타임스탬프 또는 <code>CurrentTime</code>.</li>
+<li>지정한 시각이 현재 마지막 변경 시각보다 이르거나, 현재 서버 시각보다 늦으면 <b>아무 효과가 없다</b>. 그렇지 않으면 마지막 변경 시각이 그 시각으로 바뀐다(<code>CurrentTime</code>은 현재 서버 시각으로 대체).</li>
+<li><code>owner</code>가 <code>None</code>이면 소유자가 없어진다. 아니면 요청을 보낸 클라이언트가 소유자가 된다.</li>
+<li>새 소유자(클라이언트든 <code>None</code>이든)가 기존 소유자와 다르고 기존 소유자가 <code>None</code>이 아니면, 기존 소유자에게 <code>SelectionClear</code> 이벤트가 간다.</li>
+<li>소유 클라이언트의 연결이 끊기거나 지정한 소유자 윈도가 파괴되면 소유자는 자동으로 <code>None</code>이 된다. 이때 마지막 변경 시각은 바뀌지 않는다.</li>
+<li>서버는 셀렉션 아톰을 해석하지 않는다. 셀렉션은 서버 전역이다. 오류: <code>BadAtom</code>, <code>BadWindow</code>.</li>
+</ul>
+<div class="tip">이 함수는 성공 여부를 돌려주지 않는다. 시각 조건 때문에 조용히 무시될 수 있으므로, 부른 뒤 <code>XGetSelectionOwner</code>로 내가 정말 주인이 됐는지 확인해야 한다. 또 ICCCM은 <code>CurrentTime</code> 대신 소유권을 얻게 한 사용자 동작 이벤트(버튼 놓기, 키 누름)의 <code>time</code>을 쓰라고 권한다. 네트워크 지연으로 요청 순서가 뒤바뀌어도 "사용자가 나중에 한 선택"이 이기도록 하기 위해서다. 시각 비교 규칙이 있는 이유가 바로 이것이다.</div>
+
+<h4>XGetSelectionOwner</h4>
+<pre><code>Window XGetSelectionOwner(Display *display, Atom selection);</code></pre>
+<p>지금 셀렉션을 가진 윈도 ID를 돌려준다. <code>None</code>이면 소유자가 없다. 이 윈도 ID는 <code>SelectionRequest</code>와 <code>SelectionClear</code> 이벤트에도 보고되는 값이다. 오류: <code>BadAtom</code>.</p>
+
+<h4>XConvertSelection</h4>
+<pre><code>XConvertSelection(Display *display, Atom selection, Atom target,
+                  Atom property, Window requestor, Time time);</code></pre>
+<p>셀렉션 내용을 <code>target</code> 타입으로 변환해 달라고 요청한다.</p>
+<ul>
+<li><code>property</code>: 결과를 받을 프로퍼티 이름(내 <code>requestor</code> 윈도에 쓰일 곳). <code>None</code>도 줄 수 있다.</li>
+<li><code>requestor</code>: 결과를 받을 내 윈도.</li>
+<li>소유자가 있으면 서버가 소유자에게 <code>SelectionRequest</code> 이벤트를 보낸다.</li>
+<li>소유자가 없으면 서버가 요청자에게 property가 <code>None</code>인 <code>SelectionNotify</code> 이벤트를 만들어 보낸다.</li>
+<li>인자는 두 이벤트 모두에 그대로 실려 전달된다. 미리 정의된 셀렉션 아톰은 <code>PRIMARY</code>와 <code>SECONDARY</code> 두 개다. 오류: <code>BadAtom</code>, <code>BadWindow</code>.</li>
+</ul>
+<div class="tip"><code>XConvertSelection</code>은 데이터를 돌려주지 않는다. "부탁"만 보내고 바로 돌아온다. 결과는 나중에 <code>SelectionNotify</code> 이벤트로 오고, 데이터 자체는 내 윈도의 프로퍼티에 들어 있으므로 <code>XGetWindowProperty</code>로 읽는다. 즉 붙여넣기는 이벤트 루프 안에서 비동기로 처리해야 한다.</div>
+
+<h4>전체 흐름 한눈에 보기</h4>
+<p>이 장의 함수만으로는 흐름이 다 보이지 않는다. 소유자가 요청에 답하려면 11장의 <code>XSendEvent</code>가 필요하고, 프로토콜 세부는 ICCCM이 정한다. 전체 순서는 다음과 같다.</p>
+<table>
+<tr><th>순서</th><th>소유자 A (복사한 쪽)</th><th>서버</th><th>요청자 B (붙여넣는 쪽)</th></tr>
+<tr><td>1</td><td>사용자가 텍스트 선택. <code>XSetSelectionOwner(PRIMARY, winA, t)</code> 후 <code>XGetSelectionOwner</code>로 확인</td><td>PRIMARY의 주인 = A 기록. 이전 주인에게 <code>SelectionClear</code></td><td></td></tr>
+<tr><td>2</td><td></td><td></td><td>사용자가 가운데 버튼 클릭. <code>XConvertSelection(PRIMARY, UTF8_STRING, MY_PROP, winB, t)</code></td></tr>
+<tr><td>3</td><td>← <code>SelectionRequest</code> 받음 (requestor, selection, target, property, time)</td><td>요청을 A에게 넘김</td><td></td></tr>
+<tr><td>4</td><td>target을 지원하면 <code>XChangeProperty(requestor, property, ...)</code>로 데이터를 B의 윈도에 씀. 그다음 <code>XSendEvent</code>로 <code>SelectionNotify</code>를 B에게 보냄(지원 안 하면 property = <code>None</code>으로 보냄)</td><td></td><td></td></tr>
+<tr><td>5</td><td></td><td></td><td>← <code>SelectionNotify</code> 받음. property가 <code>None</code>이면 실패. 아니면 <code>XGetWindowProperty(..., delete=True, ...)</code>로 읽고 지움</td></tr>
+<tr><td>6</td><td>나중에 다른 앱이 소유권을 가져가면 ← <code>SelectionClear</code>. 강조 표시를 풀고 데이터를 버림</td><td></td><td></td></tr>
+</table>
+
+<h4>예제: 셀렉션 소유자 (PRIMARY에 텍스트 제공)</h4>
+<pre><code>/* owner.c — cc owner.c -lX11 ; 실행 후 다른 창에서 가운데 버튼으로 붙여넣기 */
+#include &lt;stdio.h&gt;
+#include &lt;string.h&gt;
+#include &lt;X11/Xlib.h&gt;
+#include &lt;X11/Xatom.h&gt;
+
+int main(void)
+{
+    const char *text = "안녕, 셀렉션!";
+    Display *dpy = XOpenDisplay(NULL);
+    if (!dpy) return 1;
+    Window win = XCreateSimpleWindow(dpy, DefaultRootWindow(dpy), 0, 0, 1, 1, 0, 0, 0);
+    Atom UTF8 = XInternAtom(dpy, "UTF8_STRING", False);
+    Atom TARGETS = XInternAtom(dpy, "TARGETS", False);
+
+    /* 실제 앱이라면 사용자 이벤트의 time을 쓴다. 예제라서 CurrentTime. */
+    XSetSelectionOwner(dpy, XA_PRIMARY, win, CurrentTime);
+    if (XGetSelectionOwner(dpy, XA_PRIMARY) != win) {
+        fprintf(stderr, "소유권을 얻지 못했다\n");
+        return 1;
+    }
+
+    for (;;) {
+        XEvent ev;
+        XNextEvent(dpy, &amp;ev);
+        if (ev.type == SelectionClear) {          /* 다른 앱이 가져감 */
+            printf("소유권을 잃었다. 종료.\n");
+            break;
+        }
+        if (ev.type != SelectionRequest) continue;
+
+        XSelectionRequestEvent *rq = &amp;ev.xselectionrequest;
+        XSelectionEvent reply;
+        memset(&amp;reply, 0, sizeof reply);
+        reply.type      = SelectionNotify;
+        reply.requestor = rq-&gt;requestor;
+        reply.selection = rq-&gt;selection;
+        reply.target    = rq-&gt;target;
+        reply.time      = rq-&gt;time;
+        /* 옛 클라이언트는 property를 None으로 보낼 수 있다. ICCCM은 이때 target을 쓰라고 한다. */
+        reply.property  = (rq-&gt;property != None) ? rq-&gt;property : rq-&gt;target;
+
+        if (rq-&gt;target == TARGETS) {              /* 무엇으로 줄 수 있는지 알려 준다 */
+            long list[] = { (long)TARGETS, (long)UTF8, (long)XA_STRING };
+            XChangeProperty(dpy, rq-&gt;requestor, reply.property, XA_ATOM, 32,
+                            PropModeReplace, (unsigned char *)list, 3);
+        } else if (rq-&gt;target == UTF8 || rq-&gt;target == XA_STRING) {
+            /* 엄밀히는 STRING은 Latin-1이어야 한다. 예제라서 단순화. */
+            XChangeProperty(dpy, rq-&gt;requestor, reply.property, rq-&gt;target, 8,
+                            PropModeReplace, (unsigned char *)text, strlen(text));
+        } else {
+            reply.property = None;                /* 지원하지 않는 타깃: 거절 */
+        }
+        XSendEvent(dpy, rq-&gt;requestor, False, NoEventMask, (XEvent *)&amp;reply);
+        XFlush(dpy);
+    }
+    XCloseDisplay(dpy);
+    return 0;
+}</code></pre>
+
+<h4>예제: 셀렉션 요청자 (PRIMARY 읽기)</h4>
+<pre><code>/* paste.c — cc paste.c -lX11 */
+#include &lt;stdio.h&gt;
+#include &lt;X11/Xlib.h&gt;
+#include &lt;X11/Xatom.h&gt;
+
+int main(void)
+{
+    Display *dpy = XOpenDisplay(NULL);
+    if (!dpy) return 1;
+    Window win = XCreateSimpleWindow(dpy, DefaultRootWindow(dpy), 0, 0, 1, 1, 0, 0, 0);
+    Atom UTF8 = XInternAtom(dpy, "UTF8_STRING", False);
+    Atom MY_PROP = XInternAtom(dpy, "MY_PASTE", False);   /* 결과를 받을 내 프로퍼티 */
+
+    XConvertSelection(dpy, XA_PRIMARY, UTF8, MY_PROP, win, CurrentTime);
+
+    for (;;) {
+        XEvent ev;
+        XNextEvent(dpy, &amp;ev);
+        if (ev.type != SelectionNotify) continue;
+        if (ev.xselection.property == None) {     /* 소유자 없음 또는 변환 거절 */
+            printf("붙여넣을 것이 없다\n");
+            break;
+        }
+        Atom type; int format; unsigned long n, after;
+        unsigned char *data = NULL;
+        if (XGetWindowProperty(dpy, win, ev.xselection.property, 0, 1 &lt;&lt; 20,
+                               True,              /* 다 읽으면 지운다 */
+                               AnyPropertyType, &amp;type, &amp;format, &amp;n, &amp;after,
+                               &amp;data) == Success &amp;&amp; data) {
+            printf("받은 내용: %s\n", data);
+            if (after &gt; 0) printf("(아직 %lu바이트 남음)\n", after);
+            XFree(data);
+        }
+        break;
+    }
+    XCloseDisplay(dpy);
+    return 0;
+}</code></pre>
+<div class="tip">
+<b>셀렉션에서 자주 하는 실수</b>
+<ul>
+<li>요청자가 다 읽은 뒤 프로퍼티를 지우지 않는다. <code>delete = True</code>로 읽어서 지우는 것이 관례다. 소유자는 이 삭제(<code>PropertyNotify</code>)를 보고 전송이 끝났음을 알 수 있다.</li>
+<li>매우 큰 데이터를 한 번에 <code>XChangeProperty</code>로 쓴다. 서버 요청 크기에 한계가 있으므로 ICCCM은 큰 데이터에 <code>INCR</code>이라는 나눠 보내기 방식을 쓰게 한다. 이 장의 범위 밖이지만, 큰 클립보드 데이터가 잘린다면 이것이 원인이다.</li>
+<li>복사·붙여넣기 단축키(Ctrl+C/V)는 <code>PRIMARY</code>가 아니라 <code>CLIPBOARD</code> 셀렉션을 쓴다. <code>CLIPBOARD</code>는 미리 정의된 아톰이 아니므로 <code>XInternAtom(dpy, "CLIPBOARD", False)</code>로 얻는다. 흐름은 똑같다.</li>
+<li>소유자 프로그램이 끝나면 셀렉션 주인이 <code>None</code>이 되어 내용이 사라진다. 데이터가 소유자에게 있기 때문이다. 데스크톱 환경의 "클립보드 관리자"가 이 문제를 메워 준다.</li>
+</ul>
+</div>
+</section><div class="pager"><a href="ch3.html">← 3장. 창 함수 (Window Functions)</a><a href="./">차례</a><a href="ch5.html">5장. 픽스맵과 커서 함수 (Pixmap and Cursor Functions) →</a></div>
+<a class="top" href="#">↑ 위로</a>
+</html>
