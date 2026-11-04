@@ -10,7 +10,10 @@
  * Capture screen: drag = select area, Esc / right click = cancel
  * Pin:            drag = move, wheel = zoom, Ctrl+wheel = opacity
  *                 Ctrl+C = copy PNG to CLIPBOARD, Ctrl+S = save, 1 = actual size,
- *                 N = new capture, double click / Esc = close, right click = menu
+ *                 P = paint mode, N = new capture, double click / Esc = close,
+ *                 right click = menu
+ * Paint mode:     drag = draw with the tool and color chosen on the toolbar,
+ *                 [ / ] = thinner / thicker, Ctrl+Z = undo, Esc = leave paint mode
  *
  * --clipboard and Ctrl+C make snappin itself the owner of the CLIPBOARD
  * selection with an image/png target, so this works:
@@ -49,7 +52,10 @@
 #define MAX_PIXELS 40000000.0 /* do not zoom beyond this many pixels */
 #define MAX_XFERS  16          /* concurrent INCR clipboard transfers */
 #define XFER_TIMEOUT_MS 5000
-#define VERSION    "1.0"
+#define MAX_UNDO   32          /* undo steps kept per pin */
+#define UNDO_BYTES (256u << 20) /* and at most this much memory for them */
+#define MAX_THICK  41          /* thickest pen, in image pixels (odd) */
+#define VERSION    "1.2"
 
 /* command line options */
 static struct {
@@ -399,6 +405,9 @@ static int xfer_event(XPropertyEvent *e)
 
 /* ---------- pins ---------- */
 
+/* one undo step: the pixels a stroke replaced, and where they were */
+typedef struct { int x, y; Img im; } Patch;
+
 /* a floating window showing one capture */
 typedef struct {
     Window win;
@@ -409,6 +418,9 @@ typedef struct {
     uint32_t border;        /* current border color (changes while flashing) */
     int64_t flash_end;      /* when the flash ends (ms), 0 = not flashing */
     Time last_click;        /* for double click detection */
+    Patch undo[MAX_UNDO];   /* paint mode undo steps, oldest first */
+    int nundo;
+    size_t undo_bytes;      /* memory used by undo */
 } Pin;
 
 static Pin *pins[MAX_PINS];
@@ -419,6 +431,29 @@ static void menu_close(void);
  * highlighted item, width, item height and when it was opened */
 static struct { Window win; Pin *pin; int sel, w, ih; Time opened; } menu;
 
+enum { TOOL_PEN, TOOL_LINE, TOOL_RECT, TOOL_FILL };
+static const uint32_t palette[] = {
+    0xff3b30, 0xff9500, 0xffcc00, 0x34c759, 0x00c7be, 0x007aff, 0x5856d6, 0xaf52de,
+    0xff2d92, 0x8e5a2b, 0xffffff, 0xc0c0c0, 0x808080, 0x404040, 0x000000
+};
+#define PAL_N ((int)(sizeof palette / sizeof *palette))
+
+static void paint_exit(void);
+static void bar_place(void);
+/* paint mode: at most one pin at a time, with its toolbar window. The tool,
+ * color and thickness stay as they are for the next time. While a stroke is
+ * active, base is the image from before it, sx/sy the start and x/y the latest
+ * point (image pixels), wsx/wsy/wx/wy the same in window pixels, and bx0..by1
+ * the area changed so far (bx1 < 0 = nothing yet). */
+static struct {
+    Pin *pin;
+    Window bar;
+    int tool, color, thick;
+    int active, sx, sy, x, y, wsx, wsy, wx, wy, bx0, by0, bx1, by1;
+    Img base;
+    Pixmap back;   /* back buffer for the line / rectangle preview */
+} paint = { .tool = TOOL_PEN, .thick = 3 };
+
 /* the pin that owns window w, or NULL */
 static Pin *pin_find(Window w)
 {
@@ -428,31 +463,31 @@ static Pin *pin_find(Window w)
     return NULL;
 }
 
-/* copy the pixmap to the window and draw a 1 px border */
-static void pin_draw(Pin *p)
+/* copy src to the window and draw a 1 px border */
+static void pin_show(Pin *p, Pixmap src)
 {
-    XCopyArea(dpy, p->pm, p->win, gc, 0, 0, p->w, p->h, 0, 0);
+    XCopyArea(dpy, src, p->win, gc, 0, 0, p->w, p->h, 0, 0);
     XSetForeground(dpy, gc, p->border);
     XDrawRectangle(dpy, p->win, gc, 0, 0, p->w - 1, p->h - 1);
 }
 
-/* Rebuild the pixmap at the current scale (bilinear) and resize the window.
+static void pin_draw(Pin *p) { pin_show(p, p->pm); }
+
+/* Redraw the area left..right-1, top..bottom-1 of the pixmap from the image (bilinear).
  * Fixed point math: positions are in 1/256 pixel units, so fx >> 8 is the
  * source pixel and fx & 255 is the weight of its right neighbour. */
-static void pin_render(Pin *p)
+static void pin_scale(Pin *p, int left, int top, int right, int bottom)
 {
     const Img *s = &p->img;
-    int w = iround(s->w * p->scale), h = iround(s->h * p->scale);
-    if (w < 1) w = 1;
-    if (h < 1) h = 1;
-    XImage *xi = XCreateImage(dpy, vis, depth, ZPixmap, 0, NULL, w, h, 32, 0);
-    xi->data = malloc((size_t)xi->bytes_per_line * h);
-    for (int y = 0; y < h; y++) {
+    int w = p->w, h = p->h;
+    XImage *xi = XCreateImage(dpy, vis, depth, ZPixmap, 0, NULL, right - left, bottom - top, 32, 0);
+    xi->data = malloc((size_t)xi->bytes_per_line * (bottom - top));
+    for (int y = top; y < bottom; y++) {
         /* center of output row y mapped into the source, minus half a pixel */
         int64_t fy = (int64_t)(2 * y + 1) * s->h * 128 / h - 128;
         if (fy < 0) fy = 0;
         int y0 = fy >> 8, ty = fy & 255, y1 = y0 + 1 < s->h ? y0 + 1 : y0;
-        for (int x = 0; x < w; x++) {
+        for (int x = left; x < right; x++) {
             int64_t fx = (int64_t)(2 * x + 1) * s->w * 128 / w - 128;
             if (fx < 0) fx = 0;
             int x0 = fx >> 8, tx = fx & 255, x1 = x0 + 1 < s->w ? x0 + 1 : x0;
@@ -463,21 +498,32 @@ static void pin_render(Pin *p)
                           *d = s->rgb + ((size_t)y1 * s->w + x1) * 3;
             uint32_t v = 0;
             for (int i = 0; i < 3; i++) {
-                uint32_t top = a[i] * (256 - tx) + b[i] * tx, bot = c[i] * (256 - tx) + d[i] * tx;
-                v = v << 8 | ((top * (256 - ty) + bot * ty) >> 16); /* /256/256 */
+                uint32_t hi = a[i] * (256 - tx) + b[i] * tx, lo = c[i] * (256 - tx) + d[i] * tx;
+                v = v << 8 | ((hi * (256 - ty) + lo * ty) >> 16); /* /256/256 */
             }
-            XPutPixel(xi, x, y, rgb_pixel(v));
+            XPutPixel(xi, x - left, y - top, rgb_pixel(v));
         }
     }
+    XPutImage(dpy, p->pm, gc, xi, 0, 0, left, top, right - left, bottom - top);
+    XDestroyImage(xi);
+}
+
+/* rebuild the pixmap at the current scale and resize the window */
+static void pin_render(Pin *p)
+{
+    int w = iround(p->img.w * p->scale), h = iround(p->img.h * p->scale);
+    if (w < 1) w = 1;
+    if (h < 1) h = 1;
     if (p->pm)
         XFreePixmap(dpy, p->pm);
     p->pm = XCreatePixmap(dpy, root, w, h, depth);
-    XPutImage(dpy, p->pm, gc, xi, 0, 0, 0, 0, w, h);
-    XDestroyImage(xi);
     p->w = w;
     p->h = h;
+    pin_scale(p, 0, 0, w, h);
     XMoveResizeWindow(dpy, p->win, p->x, p->y, w, h);
     pin_draw(p);
+    if (paint.pin == p)
+        bar_place();
 }
 
 /* create a floating window for img at screen position x, y; takes ownership of img */
@@ -515,6 +561,8 @@ static void pin_close(Pin *p)
 {
     if (menu.win && menu.pin == p)
         menu_close();
+    if (paint.pin == p)
+        paint_exit();
     for (int i = 0; i < npins; i++)
         if (pins[i] == p) {
             pins[i] = pins[--npins];
@@ -522,6 +570,8 @@ static void pin_close(Pin *p)
         }
     XDestroyWindow(dpy, p->win);
     XFreePixmap(dpy, p->pm);
+    for (int i = 0; i < p->nundo; i++)
+        free(p->undo[i].im.rgb);
     free(p->img.rgb);
     free(p);
 }
@@ -615,12 +665,432 @@ static void close_all(void)
         pin_close(pins[0]);
 }
 
+/* ---------- paint mode ----------
+ *
+ * Strokes are drawn into the original pixels (img), so copy, save and zoom all
+ * include them. The pen changes img as it moves; lines and rectangles are only
+ * previewed with X drawing calls and go into img when the button is released.
+ * Each finished stroke leaves a Patch with the old pixels of the area it
+ * touched, which is what undo puts back.
+ */
+
+/* fill x0..x1, y0..y1 (inclusive, clipped to the image) with the current color */
+static void paint_fill(Img *im, int x0, int y0, int x1, int y1)
+{
+    uint32_t c = palette[paint.color];
+    uint8_t rgb[3] = { (uint8_t)(c >> 16), (uint8_t)(c >> 8), (uint8_t)c };
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 >= im->w) x1 = im->w - 1;
+    if (y1 >= im->h) y1 = im->h - 1;
+    if (x0 > x1 || y0 > y1)
+        return;
+    for (int y = y0; y <= y1; y++) {
+        uint8_t *d = im->rgb + ((size_t)y * im->w + x0) * 3;
+        for (int x = x0; x <= x1; x++, d += 3)
+            memcpy(d, rgb, 3);
+    }
+    if (x0 < paint.bx0) paint.bx0 = x0;
+    if (y0 < paint.by0) paint.by0 = y0;
+    if (x1 > paint.bx1) paint.bx1 = x1;
+    if (y1 > paint.by1) paint.by1 = y1;
+}
+
+/* round dot of the current thickness */
+static void paint_dot(Img *im, int x, int y)
+{
+    int r = paint.thick / 2;
+    for (int dy = -r; dy <= r; dy++) {
+        int dx = r;
+        while (dx * dx + dy * dy > r * r + r)
+            dx--;
+        paint_fill(im, x - dx, y + dy, x + dx, y + dy);
+    }
+}
+
+/* Bresenham line of dots */
+static void paint_line(Img *im, int x0, int y0, int x1, int y1)
+{
+    int dx = abs(x1 - x0), dy = -abs(y1 - y0);
+    int sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1, err = dx + dy;
+    for (;;) {
+        paint_dot(im, x0, y0);
+        if (x0 == x1 && y0 == y1)
+            break;
+        int e2 = 2 * err;
+        if (e2 >= dy) { err += dy; x0 += sx; }
+        if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+}
+
+/* draw the line or rectangle from the stroke's start to its latest point */
+static void paint_shape(Img *im)
+{
+    int r = paint.thick / 2;
+    int x0 = paint.sx < paint.x ? paint.sx : paint.x, x1 = paint.sx < paint.x ? paint.x : paint.sx;
+    int y0 = paint.sy < paint.y ? paint.sy : paint.y, y1 = paint.sy < paint.y ? paint.y : paint.sy;
+    if (paint.tool == TOOL_LINE) {
+        paint_line(im, paint.sx, paint.sy, paint.x, paint.y);
+    } else if (paint.tool == TOOL_FILL) {
+        paint_fill(im, x0, y0, x1, y1);
+    } else {
+        paint_fill(im, x0 - r, y0 - r, x1 + r, y0 + r);
+        paint_fill(im, x0 - r, y1 - r, x1 + r, y1 + r);
+        paint_fill(im, x0 - r, y0, x0 + r, y1);
+        paint_fill(im, x1 - r, y0, x1 + r, y1);
+    }
+}
+
+/* the image area x0..x1, y0..y1 (inclusive) changed: refresh it in the pixmap */
+static void pin_update(Pin *p, int x0, int y0, int x1, int y1)
+{
+    /* one pixel of margin on each side, for the bilinear neighbours */
+    int wx0 = (int64_t)(x0 - 1) * p->w / p->img.w - 1, wy0 = (int64_t)(y0 - 1) * p->h / p->img.h - 1;
+    int wx1 = (int64_t)(x1 + 2) * p->w / p->img.w + 2, wy1 = (int64_t)(y1 + 2) * p->h / p->img.h + 2;
+    if (wx0 < 0) wx0 = 0;
+    if (wy0 < 0) wy0 = 0;
+    if (wx1 > p->w) wx1 = p->w;
+    if (wy1 > p->h) wy1 = p->h;
+    if (wx0 < wx1 && wy0 < wy1)
+        pin_scale(p, wx0, wy0, wx1, wy1);
+    pin_draw(p);
+}
+
+/* remember the base pixels of the area x0..x1, y0..y1 as a new undo step */
+static void undo_push(Pin *p, int x0, int y0, int x1, int y1)
+{
+    int w = x1 - x0 + 1, h = y1 - y0 + 1;
+    size_t n = (size_t)w * h * 3;
+    Patch u = { x0, y0, { w, h, malloc(n) } };
+    if (!u.im.rgb)
+        return;
+    for (int y = 0; y < h; y++)
+        memcpy(u.im.rgb + (size_t)y * w * 3,
+               paint.base.rgb + ((size_t)(y0 + y) * paint.base.w + x0) * 3, (size_t)w * 3);
+    /* forget the oldest steps to stay within the limits */
+    while (p->nundo && (p->nundo == MAX_UNDO || p->undo_bytes + n > UNDO_BYTES)) {
+        p->undo_bytes -= (size_t)p->undo[0].im.w * p->undo[0].im.h * 3;
+        free(p->undo[0].im.rgb);
+        memmove(p->undo, p->undo + 1, --p->nundo * sizeof *p->undo);
+    }
+    p->undo[p->nundo++] = u;
+    p->undo_bytes += n;
+}
+
+/* Ctrl+Z / the Undo button: put back the pixels of the last stroke */
+static void paint_undo(Pin *p)
+{
+    if (!p->nundo)
+        return;
+    Patch *u = &p->undo[--p->nundo];
+    p->undo_bytes -= (size_t)u->im.w * u->im.h * 3;
+    for (int y = 0; y < u->im.h; y++)
+        memcpy(p->img.rgb + ((size_t)(u->y + y) * p->img.w + u->x) * 3,
+               u->im.rgb + (size_t)y * u->im.w * 3, (size_t)u->im.w * 3);
+    pin_update(p, u->x, u->y, u->x + u->im.w - 1, u->y + u->im.h - 1);
+    free(u->im.rgb);
+}
+
+/* show the line or rectangle being dragged, without touching the image */
+static void stroke_preview(Pin *p)
+{
+    int x0 = paint.wsx < paint.wx ? paint.wsx : paint.wx, w = abs(paint.wx - paint.wsx);
+    int y0 = paint.wsy < paint.wy ? paint.wsy : paint.wy, h = abs(paint.wy - paint.wsy);
+    int lw = iround(paint.thick * p->scale);
+    XCopyArea(dpy, p->pm, paint.back, gc, 0, 0, p->w, p->h, 0, 0);
+    XSetForeground(dpy, gc, rgb_pixel(palette[paint.color]));
+    XSetLineAttributes(dpy, gc, lw < 1 ? 1 : lw, LineSolid, CapRound, JoinMiter);
+    if (paint.tool == TOOL_LINE)
+        XDrawLine(dpy, paint.back, gc, paint.wsx, paint.wsy, paint.wx, paint.wy);
+    else if (paint.tool == TOOL_FILL)
+        XFillRectangle(dpy, paint.back, gc, x0, y0, w + 1, h + 1);
+    else
+        XDrawRectangle(dpy, paint.back, gc, x0, y0, w, h);
+    XSetLineAttributes(dpy, gc, 0, LineSolid, CapButt, JoinMiter); /* the GC is shared */
+    pin_show(p, paint.back);
+}
+
+/* Finish the stroke. keep = 0 cancels it. */
+static void stroke_end(Pin *p, int keep)
+{
+    if (!paint.active)
+        return;
+    paint.active = 0;
+    if (keep && paint.tool != TOOL_PEN)
+        paint_shape(&p->img);
+    if (paint.back) {
+        XFreePixmap(dpy, paint.back);
+        paint.back = 0;
+    }
+    if (paint.bx1 < 0) {
+        pin_draw(p); /* nothing landed on the image: just remove the preview */
+    } else {
+        if (keep)
+            undo_push(p, paint.bx0, paint.by0, paint.bx1, paint.by1);
+        else
+            memcpy(p->img.rgb, paint.base.rgb, (size_t)p->img.w * p->img.h * 3);
+        pin_update(p, paint.bx0, paint.by0, paint.bx1, paint.by1);
+    }
+    free(paint.base.rgb);
+    paint.base.rgb = NULL;
+}
+
+/* window position -> image pixel */
+static int to_img(int v, int img, int win) { return (int64_t)v * img / win; }
+
+/* button pressed at window position wx, wy */
+static void stroke_begin(Pin *p, int wx, int wy)
+{
+    size_t n = (size_t)p->img.w * p->img.h * 3;
+    paint.base = p->img;
+    paint.base.rgb = malloc(n);
+    if (!paint.base.rgb)
+        return;
+    memcpy(paint.base.rgb, p->img.rgb, n);
+    paint.active = 1;
+    paint.wsx = paint.wx = wx;
+    paint.wsy = paint.wy = wy;
+    paint.sx = paint.x = to_img(wx, p->img.w, p->w);
+    paint.sy = paint.y = to_img(wy, p->img.h, p->h);
+    paint.bx0 = p->img.w;
+    paint.by0 = p->img.h;
+    paint.bx1 = paint.by1 = -1;
+    if (paint.tool == TOOL_PEN) {
+        int r = paint.thick / 2;
+        paint_dot(&p->img, paint.x, paint.y);
+        pin_update(p, paint.x - r, paint.y - r, paint.x + r, paint.y + r);
+    } else {
+        paint.back = XCreatePixmap(dpy, root, p->w, p->h, depth);
+        stroke_preview(p);
+    }
+}
+
+/* the pointer moved to window position wx, wy during a stroke */
+static void stroke_move(Pin *p, int wx, int wy)
+{
+    if (!paint.active)
+        return;
+    int x = to_img(wx, p->img.w, p->w), y = to_img(wy, p->img.h, p->h), r = paint.thick / 2;
+    int lx = paint.x, ly = paint.y;
+    paint.wx = wx;
+    paint.wy = wy;
+    paint.x = x;
+    paint.y = y;
+    if (paint.tool == TOOL_PEN) {
+        paint_line(&p->img, lx, ly, x, y);
+        pin_update(p, (x < lx ? x : lx) - r, (y < ly ? y : ly) - r,
+                   (x < lx ? lx : x) + r, (y < ly ? ly : y) + r);
+    } else {
+        stroke_preview(p);
+    }
+}
+
+/* toolbar: a row of buttons, one slot of it showing the thickness, and a row of
+ * color swatches. Items are numbered buttons first, then swatches. */
+enum { BAR_MINUS = 4, BAR_PLUS, BAR_UNDO, BAR_DONE, BAR_BTNS };
+static const char *bar_label[] = { "Pen", "Line", "Rect", "Fill", "-", "+", "Undo", "Done" };
+#define BAR_PAD 6
+#define BAR_GAP 4
+#define BAR_SWATCH 22
+
+static int bar_bw(void) { return text_w("Undo") + 16; }
+static int bar_bh(void) { return font_h() + 8; }
+static int bar_w(void) { return 2 * BAR_PAD + 9 * bar_bw() + 8 * BAR_GAP; }
+static int bar_h(void) { return 2 * BAR_PAD + bar_bh() + BAR_GAP + BAR_SWATCH; }
+
+/* position and size of item i */
+static void bar_rect(int i, int *x, int *y, int *w, int *h)
+{
+    if (i < BAR_BTNS) {
+        int slot = i < BAR_PLUS ? i : i + 1; /* skip the thickness slot */
+        *x = BAR_PAD + slot * (bar_bw() + BAR_GAP);
+        *y = BAR_PAD;
+        *w = bar_bw();
+        *h = bar_bh();
+    } else {
+        int inner = bar_w() - 2 * BAR_PAD;
+        *x = BAR_PAD + (i - BAR_BTNS) * inner / PAL_N;
+        *y = BAR_PAD + bar_bh() + BAR_GAP;
+        *w = inner / PAL_N - 2;
+        *h = BAR_SWATCH;
+    }
+}
+
+/* item at x, y (toolbar coordinates), or -1 */
+static int bar_hit(int x, int y)
+{
+    for (int i = 0; i < BAR_BTNS + PAL_N; i++) {
+        int bx, by, bw, bh;
+        bar_rect(i, &bx, &by, &bw, &bh);
+        if (x >= bx && x < bx + bw && y >= by && y < by + bh)
+            return i;
+    }
+    return -1;
+}
+
+static void bar_draw(void)
+{
+    int x, y, w, h;
+    char t[16];
+    XSetForeground(dpy, gc, rgb_pixel(0x2b2b2b));
+    XFillRectangle(dpy, paint.bar, gc, 0, 0, bar_w(), bar_h());
+    for (int i = 0; i < BAR_BTNS; i++) {
+        int on = i == paint.tool;
+        bar_rect(i, &x, &y, &w, &h);
+        XSetForeground(dpy, gc, on ? border_px : rgb_pixel(0x444444));
+        XFillRectangle(dpy, paint.bar, gc, x, y, w, h);
+        draw_text(paint.bar, x + (w - text_w(bar_label[i])) / 2, y + (h - font_h()) / 2 + font_asc(),
+                  bar_label[i], on ? 0x000000 : 0xeeeeee);
+    }
+    snprintf(t, sizeof t, "%dpx", paint.thick);
+    x = BAR_PAD + BAR_PLUS * (bar_bw() + BAR_GAP);
+    draw_text(paint.bar, x + (bar_bw() - text_w(t)) / 2, BAR_PAD + (bar_bh() - font_h()) / 2 + font_asc(),
+              t, 0xeeeeee);
+    for (int i = 0; i < PAL_N; i++) {
+        bar_rect(BAR_BTNS + i, &x, &y, &w, &h);
+        XSetForeground(dpy, gc, rgb_pixel(palette[i]));
+        XFillRectangle(dpy, paint.bar, gc, x, y, w, h);
+        if (i == paint.color) { /* two rings, so it shows on any color */
+            XSetForeground(dpy, gc, rgb_pixel(0xffffff));
+            XDrawRectangle(dpy, paint.bar, gc, x, y, w - 1, h - 1);
+            XSetForeground(dpy, gc, rgb_pixel(0x000000));
+            XDrawRectangle(dpy, paint.bar, gc, x + 1, y + 1, w - 3, h - 3);
+        }
+    }
+    XSetForeground(dpy, gc, rgb_pixel(0x555555));
+    XDrawRectangle(dpy, paint.bar, gc, 0, 0, bar_w() - 1, bar_h() - 1);
+}
+
+/* put the toolbar under the pin, above it if there is no room, else inside it */
+static void bar_place(void)
+{
+    Pin *p = paint.pin;
+    int w = bar_w(), h = bar_h(), x = p->x, y = p->y + p->h + 4;
+    if (y + h > SH)
+        y = p->y - h - 4;
+    if (y < 0)
+        y = p->y + p->h - h - 4;
+    if (y + h > SH) y = SH - h;
+    if (y < 0) y = 0;
+    if (x + w > SW) x = SW - w;
+    if (x < 0) x = 0;
+    XMoveWindow(dpy, paint.bar, x, y);
+    XRaiseWindow(dpy, paint.bar);
+}
+
+static void paint_enter(Pin *p)
+{
+    if (paint.pin)
+        paint_exit();
+    paint.pin = p;
+    XDefineCursor(dpy, p->win, cur_cross);
+    XSetWindowAttributes a = { 0 };
+    a.override_redirect = True;
+    a.background_pixmap = None;
+    a.event_mask = ExposureMask | ButtonPressMask;
+    paint.bar = XCreateWindow(dpy, root, 0, 0, bar_w(), bar_h(), 0, CopyFromParent, InputOutput,
+                              CopyFromParent, CWOverrideRedirect | CWBackPixmap | CWEventMask, &a);
+    bar_place();
+    XMapRaised(dpy, paint.bar);
+}
+
+static void paint_exit(void)
+{
+    stroke_end(paint.pin, 0);
+    XDestroyWindow(dpy, paint.bar);
+    XDefineCursor(dpy, paint.pin->win, cur_move);
+    paint.bar = 0;
+    paint.pin = NULL;
+}
+
+/* the menu item and the P key */
+static void paint_toggle(Pin *p)
+{
+    if (paint.pin == p)
+        paint_exit();
+    else
+        paint_enter(p);
+}
+
+/* change the thickness by one step (only odd widths have a center pixel) */
+static void paint_thick(int dir)
+{
+    int t = paint.thick + 2 * dir;
+    if (t >= 1 && t <= MAX_THICK) {
+        paint.thick = t;
+        bar_draw();
+    }
+}
+
+/* events for the toolbar window */
+static void bar_event(XEvent *e)
+{
+    if (e->type == Expose && e->xexpose.count == 0) {
+        bar_draw();
+    } else if (e->type == ButtonPress && e->xbutton.button == Button1) {
+        int i = bar_hit(e->xbutton.x, e->xbutton.y);
+        if (i < 0)
+            return;
+        if (i < BAR_MINUS) paint.tool = i;
+        else if (i >= BAR_BTNS) paint.color = i - BAR_BTNS;
+        else if (i == BAR_MINUS) paint_thick(-1);
+        else if (i == BAR_PLUS) paint_thick(1);
+        else if (i == BAR_UNDO) paint_undo(paint.pin);
+        else paint_exit();
+        if (paint.pin)
+            bar_draw();
+    }
+}
+
+/* Events for a pin in paint mode. Returns 0 for events the normal pin controls
+ * should still handle (zoom, opacity, menu, copy, save...). */
+static int paint_event(Pin *p, XEvent *e)
+{
+    switch (e->type) {
+    case ButtonPress:
+        if (paint.active)
+            return 1; /* nothing else in the middle of a stroke */
+        if (e->xbutton.button != Button1)
+            return 0;
+        stroke_begin(p, e->xbutton.x, e->xbutton.y);
+        return 1;
+    case MotionNotify:
+        while (XCheckTypedWindowEvent(dpy, p->win, MotionNotify, e))
+            ; /* use only the latest position */
+        stroke_move(p, e->xmotion.x, e->xmotion.y);
+        return 1;
+    case ButtonRelease:
+        if (e->xbutton.button == Button1 && paint.active) {
+            stroke_move(p, e->xbutton.x, e->xbutton.y);
+            stroke_end(p, 1);
+        }
+        return 1;
+    case KeyPress: {
+        KeySym k = XLookupKeysym(&e->xkey, 0);
+        int ctrl = e->xkey.state & ControlMask;
+        if (paint.active) { /* Esc cancels the stroke, other keys wait for it to end */
+            if (k == XK_Escape)
+                stroke_end(p, 0);
+            return 1;
+        }
+        if (k == XK_Escape) paint_exit();
+        else if (ctrl && k == XK_z) paint_undo(p);
+        else if (!ctrl && k == XK_bracketleft) paint_thick(-1);
+        else if (!ctrl && k == XK_bracketright) paint_thick(1);
+        else return 0;
+        return 1;
+    }
+    }
+    return 0;
+}
+
 /* ---------- right click menu ---------- */
 
 /* menu items and their shortcut labels; the order matches menu_event() */
-static const char *menu_label[] = { "Copy", "Save", "Actual size", "New capture", "Close", "Close all" };
-static const char *menu_key[] = { "Ctrl+C", "Ctrl+S", "1", "N", "Esc", "" };
-#define MENU_N 6
+static const char *menu_label[] = { "Copy", "Save", "Actual size", "Paint mode", "New capture", "Close", "Close all" };
+static const char *menu_key[] = { "Ctrl+C", "Ctrl+S", "1", "P", "N", "Esc", "" };
+#define MENU_N 7
+#define MENU_PAINT 3
 
 /* draw all items, the highlighted one with the border color */
 static void menu_draw(void)
@@ -646,6 +1116,7 @@ static void menu_draw(void)
 static void menu_open(Pin *p, int rx, int ry, Time t)
 {
     int lw = 0, kw = 0;
+    menu_label[MENU_PAINT] = paint.pin == p ? "Exit paint" : "Paint mode";
     for (int i = 0; i < MENU_N; i++) {
         if (text_w(menu_label[i]) > lw) lw = text_w(menu_label[i]);
         if (text_w(menu_key[i]) > kw) kw = text_w(menu_key[i]);
@@ -719,9 +1190,10 @@ static void menu_event(XEvent *e)
         case 0: pin_copy(p, e->xbutton.time); break;
         case 1: pin_save(p); break;
         case 2: pin_reset(p); break;
-        case 3: new_capture(); break;
-        case 4: pin_close(p); break;
-        case 5: close_all(); break;
+        case 3: paint_toggle(p); break;
+        case 4: new_capture(); break;
+        case 5: pin_close(p); break;
+        case 6: close_all(); break;
         }
         break;
     }
@@ -735,6 +1207,8 @@ static void menu_event(XEvent *e)
 /* events for a pin window: mouse and keyboard controls */
 static void pin_event(Pin *p, XEvent *e)
 {
+    if (paint.pin == p && paint_event(p, e))
+        return;
     switch (e->type) {
     case Expose:
         if (e->xexpose.count == 0)
@@ -783,6 +1257,7 @@ static void pin_event(Pin *p, XEvent *e)
         else if (ctrl && k == XK_s) pin_save(p);
         else if (!ctrl && k == XK_1) pin_reset(p);
         else if (!ctrl && k == XK_n) new_capture();
+        else if (!ctrl && k == XK_p) paint_toggle(p);
         break;
     }
     }
@@ -840,6 +1315,8 @@ static void start_capture(void)
 {
     if (sel.active)
         return;
+    if (paint.active)
+        stroke_end(paint.pin, 1); /* our pointer grab would swallow its button release */
     XImage *shot = XGetImage(dpy, root, 0, 0, SW, SH, AllPlanes, ZPixmap);
     if (!shot) {
         fprintf(stderr, "Could not grab the screen. Is this an X11 session?\n");
@@ -1032,7 +1509,11 @@ static void usage(FILE *f)
 "Selection: drag = select, Esc / right click = cancel\n"
 "Pin window: drag = move, wheel = zoom, Ctrl+wheel = opacity,\n"
 "  Ctrl+C = copy, Ctrl+S = save (to the -o place), 1 = actual size,\n"
-"  N = new capture, double click / Esc = close, right click = menu\n"
+"  P = paint mode, N = new capture, double click / Esc = close,\n"
+"  right click = menu\n"
+"Paint mode: drag = draw (pen, line, rectangle, filled rectangle), toolbar =\n"
+"  tool, color, thickness; [ / ] = thickness, Ctrl+Z = undo, Esc = leave.\n"
+"  Copy and save include what you drew.\n"
 "\n"
 "The saved file path is printed to stdout. Exit status: 0 = ok,\n"
 "1 = cancelled or failed, 2 = bad usage.\n"
@@ -1251,6 +1732,8 @@ int main(int argc, char **argv)
                 sel_event(&e);
             else if (menu.win && e.xany.window == menu.win)
                 menu_event(&e);
+            else if (paint.bar && e.xany.window == paint.bar)
+                bar_event(&e);
             else if ((p = pin_find(e.xany.window)))
                 pin_event(p, &e);
         }
