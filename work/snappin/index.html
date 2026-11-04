@@ -84,7 +84,7 @@ snappin -o - | convert - out.jpg     # PNG를 표준 출력으로</pre>
 <h2 id="변경-기록">변경 기록</h2>
 <p>최신이 위입니다. 시간은 한국 시간. 바뀐 코드는 <a href="https://github.com/innollia/joibongbang/commits/main/work/snappin">GitHub 커밋 기록</a>에서 볼 수 있습니다.</p>
 <table>
-<tr><td>2026-11-04 23:40</td><td><b>포커스 복원</b> — 도이의 GLM 5.3이 고친 파일 반영. 그림에 마우스를 올렸다 빼면 키보드 포커스를 원래 창에 돌려줌(그림을 닫을 때도). 그림이 키 입력을 계속 가져가던 문제 수정. 다시 복사할 때 생기는 CLIPBOARD 해제 알림으로 복사 데이터를 지우지 않게 함. <code>SNAPPIN_DEBUG</code> 환경변수를 켜면 클립보드 요청을 표준 에러에 찍음. 알려진 문제: 페인트 도구 막대 위에서는 키 입력이 그림으로 가지 않음.</td></tr>
+<tr><td>2026-11-04 23:40</td><td><b>포커스 복원</b> — 도이의 GLM 5.3이 고친 파일 반영. 그림에 마우스를 올렸다 빼면 키보드 포커스를 원래 창에 돌려줌(그림을 닫을 때도). 그림이 키 입력을 계속 가져가던 문제 수정. 다시 복사할 때 생기는 CLIPBOARD 해제 알림으로 복사 데이터를 지우지 않게 함. <code>SNAPPIN_DEBUG</code> 환경변수를 켜면 클립보드 요청을 표준 에러에 찍음. 알려진 문제: 페인트 도구 막대 위에서는 키 입력이 그림으로 가지 않음. <a href="https://github.com/innollia/joibongbang/commit/0ae6ae5">0ae6ae5</a></td></tr>
 <tr><td>2026-11-04 23:00</td><td><b>1.2 — 페인트 모드</b> — 오른쪽 클릭 메뉴에 Paint mode 추가(단축키 P). 펜, 직선, 직사각형(외곽선·채움), 색 15개, 굵기, 되돌리기. 그린 내용은 복사·저장에 포함. <a href="https://github.com/innollia/joibongbang/commit/3bbae57">3bbae57</a></td></tr>
 <tr><td>2026-11-01 20:40</td><td><b>1.1 되돌림</b> — 간략화(1.1, <a href="https://github.com/innollia/joibongbang/commit/ec697e1">ec697e1</a>)가 문제를 일으켜, 코드와 페이지를 그 직전(stdint 버전, 1.0)으로 되돌림.</td></tr>
 <tr><td>2026-11-01 18:58</td><td><b>stdint 타입</b> — <code>unsigned long</code>·<code>unsigned char</code>·<code>long</code> 등을 <code>uint32_t</code>(픽셀 값·색), <code>uint8_t</code>(바이트·RGB), <code>int64_t</code>(ms 시간)로 바꿈. Xlib가 꼭 요구하는 곳(format 32 속성의 <code>long</code>, <code>XParseGeometry</code>의 <code>unsigned int</code>)만 남김. 동작은 그대로. <a href="https://github.com/innollia/joibongbang/commit/5d55327">5d55327</a></td></tr>
