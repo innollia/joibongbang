@@ -334,6 +334,10 @@ static int clip_set(const Img *im, Time t)
  * TIMESTAMP and image/png. Anything else is refused (property = None). */
 static void clip_request(XSelectionRequestEvent *r)
 {
+    if (getenv("SNAPPIN_DEBUG"))
+        fprintf(stderr, "clipreq: target=%lu prop=%lu time=%lu owned=%d len=%zu\n",
+                (unsigned long)r->target, (unsigned long)r->property, (unsigned long)r->time,
+                clip.owned, clip.len);
     XSelectionEvent ev = { 0 };
     ev.type = SelectionNotify;
     ev.display = r->display;
@@ -379,6 +383,8 @@ static void clip_request(XSelectionRequestEvent *r)
         }
     }
     /* tell the requestor we are done (property = None means refused) */
+    if (getenv("SNAPPIN_DEBUG"))
+        fprintf(stderr, "cliprep: prop=%lu\n", (unsigned long)ev.property);
     XSendEvent(dpy, r->requestor, False, NoEventMask, (XEvent *)&ev);
 }
 
@@ -418,6 +424,8 @@ typedef struct {
     uint32_t border;        /* current border color (changes while flashing) */
     int64_t flash_end;      /* when the flash ends (ms), 0 = not flashing */
     Time last_click;        /* for double click detection */
+    Window previous_focus;
+    int previous_revert, focus_saved;
     Patch undo[MAX_UNDO];   /* paint mode undo steps, oldest first */
     int nundo;
     size_t undo_bytes;      /* memory used by undo */
@@ -461,6 +469,23 @@ static Pin *pin_find(Window w)
         if (pins[i]->win == w)
             return pins[i];
     return NULL;
+}
+
+static void pin_restore_focus(Pin *p)
+{
+    if (!p->focus_saved)
+        return;
+    p->focus_saved = 0;
+    Window current;
+    int revert;
+    XGetInputFocus(dpy, &current, &revert);
+    if (current != p->win) /* another application has already taken focus */
+        return;
+    XSetInputFocus(dpy, p->previous_focus, p->previous_revert, CurrentTime);
+    XGetInputFocus(dpy, &current, &revert);
+    if (current == p->win) /* the previous window may have gone away */
+        XSetInputFocus(dpy, PointerRoot, RevertToPointerRoot, CurrentTime);
+    XFlush(dpy);
 }
 
 /* copy src to the window and draw a 1 px border */
@@ -545,7 +570,7 @@ static void pin_new(Img img, int x, int y)
     a.background_pixmap = None; /* do not clear before redraw, avoids flicker */
     a.cursor = cur_move;
     a.event_mask = ExposureMask | ButtonPressMask | ButtonReleaseMask | Button1MotionMask |
-                   KeyPressMask | EnterWindowMask;
+                   KeyPressMask | EnterWindowMask | LeaveWindowMask;
     p->win = XCreateWindow(dpy, root, x, y, img.w, img.h, 0, CopyFromParent, InputOutput,
                            CopyFromParent, CWOverrideRedirect | CWBackPixmap | CWCursor | CWEventMask, &a);
     XStoreName(dpy, p->win, "snappin");
@@ -561,6 +586,7 @@ static void pin_close(Pin *p)
 {
     if (menu.win && menu.pin == p)
         menu_close();
+    pin_restore_focus(p);
     if (paint.pin == p)
         paint_exit();
     for (int i = 0; i < npins; i++)
@@ -1216,7 +1242,18 @@ static void pin_event(Pin *p, XEvent *e)
         break;
     case EnterNotify:
         /* override-redirect windows never get focus from the WM, so take it on hover */
+        if (p->focus_saved)
+            break;
+        XGetInputFocus(dpy, &p->previous_focus, &p->previous_revert);
+        if (p->previous_focus == p->win)
+            break;
+        p->focus_saved = 1;
         XSetInputFocus(dpy, p->win, RevertToPointerRoot, CurrentTime);
+        XFlush(dpy);
+        break;
+    case LeaveNotify:
+        /* the pointer left: give keyboard input back to where it was */
+        pin_restore_focus(p);
         break;
     case ButtonPress: {
         XButtonEvent *b = &e->xbutton;
@@ -1724,8 +1761,11 @@ int main(int argc, char **argv)
             if (e.type == SelectionRequest)
                 clip_request(&e.xselectionrequest);
             else if (e.type == SelectionClear) {
-                if (e.xselectionclear.selection == a_clipboard)
-                    clip_drop(); /* someone else copied something */
+                /* taking the selection we already hold can echo a clear; ignore
+                 * it while we still own the clipboard */
+                if (e.xselectionclear.selection == a_clipboard &&
+                    XGetSelectionOwner(dpy, a_clipboard) != clip_win)
+                    clip_drop(); /* someone else took the clipboard */
             } else if (e.type == PropertyNotify && xfer_event(&e.xproperty))
                 ;
             else if (sel.active && e.xany.window == sel.win)
