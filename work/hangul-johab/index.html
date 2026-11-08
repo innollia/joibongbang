@@ -32,7 +32,6 @@
 </head>
 <body>
 <h1>조합형 ↔ 완성형 한글 변환</h1>
-<p class="note">"조합형"은 두 가지 뜻으로 쓰여서 둘 다 넣었어요. 위 탭에서 고르세요. 모든 변환은 브라우저 안에서만 해요.</p>
 
 <div class="tabs">
   <button id="tabU" class="on">① 유니코드: 완성형 음절 ↔ 첫가끝 자모</button>
@@ -41,7 +40,6 @@
 
 <!-- ① 유니코드 -->
 <section class="panel" id="panelU">
-  <p class="note">완성형은 <code>가</code>(U+AC00) 같은 한 글자, 조합형은 <code>ᄀ+ᅡ</code>(U+1100 U+1161)처럼 첫소리·가운뎃소리·끝소리 자모를 이어 쓴 것(NFD)이에요. 맥 파일 이름이 "ㅎㅏㄴㄱㅡㄹ"처럼 풀려 보이는 게 이 조합형 때문이에요. 화면에서는 둘이 똑같이 보일 수 있어서 아래에 코드를 같이 보여 줘요.</p>
   <fieldset>
     <legend>조합형 쪽 형식</legend>
     <label><input type="radio" name="ufmt" value="nfd" checked> 첫가끝 자모 (U+1100~, NFD)</label>
@@ -61,7 +59,6 @@
       <textarea id="uR"></textarea>
     </div>
   </div>
-  <p class="note">완성형으로 바꿀 때는 첫가끝 자모, 낱자(ㄱㅏㄴ → 간, ㄷㅏㄹㄱ → 닭), 섞인 글 모두 받아요. 한글이 아닌 글자는 그대로 둬요.</p>
   <label class="t">완성형 코드</label>
   <div class="codes" id="uLc"></div>
   <label class="t">조합형 코드</label>
@@ -70,7 +67,6 @@
 
 <!-- ② 옛 코드 -->
 <section class="panel" id="panelE" hidden>
-  <p class="note">1990년대 한글 코드 이야기예요. <b>조합형</b>(상용 조합형, KS X 1001:1992 부속서 3, Johab, CP1361)은 2바이트 16비트를 <code>1 | 초성 5비트 | 중성 5비트 | 종성 5비트</code>로 나눠 현대 한글 11,172자를 모두 표현해요. <b>완성형</b>(KS X 1001, EUC-KR)은 자주 쓰는 2,350자에만 번호를 매겨서, "똠"·"쀍" 같은 글자는 넣을 수 없어요.</p>
   <div class="row">
     <div>
       <label class="t" for="eL">글 (완성형 글자)</label>
@@ -85,7 +81,6 @@
       <textarea id="eR" class="hex"></textarea>
     </div>
   </div>
-  <p class="note">16진수 칸에는 <code>88 61</code>, <code>8861</code>, <code>0x8861</code> 모두 넣을 수 있어요. 한글, 한글 낱자, ASCII, 기호·한자(KS X 1001에 있는 것)를 바꿔요.</p>
   <div id="eMsg" class="err"></div>
   <label class="t">완성형(EUC-KR) 바이트</label>
   <div class="codes" id="eEuc"></div>
@@ -102,13 +97,12 @@
       <select id="fOut"><option value="johab">조합형</option><option value="euckr">완성형 (EUC-KR)</option><option value="utf8">UTF-8</option></select>
       <button id="fSave">저장</button>
     </div>
-    <p class="note">예: 옛 조합형 .txt를 "조합형"으로 열고 "UTF-8"로 저장하면 요즘 메모장에서 읽혀요. 완성형으로 저장할 때 2,350자 밖의 글자는 <code>?</code>가 돼요.</p>
   </fieldset>
 
   <details open>
     <summary>글자별 비트 나누기 (앞 30자)</summary>
     <table id="eTab"></table>
-    <p class="note"><span class="bits"><b>빨강</b> 초성, <i>파랑</i> 중성, <u>초록</u> 종성</span>. 값 1(초성·종성), 2(중성)는 "채움", 즉 그 자리가 비었다는 뜻이에요.</p>
+    <p class="note"><span class="bits"><b>빨강</b> 초성, <i>파랑</i> 중성, <u>초록</u> 종성</span></p>
   </details>
 </section>
 
