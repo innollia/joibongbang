@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>조합형 ↔ 완성형 한글 변환</title>
+<style>
+  body { font-family: system-ui, "Malgun Gothic", sans-serif; max-width: 960px; margin: 0 auto; padding: 16px; line-height: 1.5; color: #222; }
+  h1 { font-size: 1.5em; margin-bottom: 4px; }
+  .tabs { display: flex; gap: 4px; margin: 16px 0 0; flex-wrap: wrap; }
+  .tabs button { padding: 8px 14px; border: 1px solid #aaa; border-bottom: none; background: #eee; cursor: pointer; border-radius: 6px 6px 0 0; font-size: 1em; }
+  .tabs button.on { background: #fff; font-weight: bold; }
+  .panel { border: 1px solid #aaa; padding: 14px; border-radius: 0 6px 6px 6px; }
+  .panel[hidden] { display: none; }
+  .row { display: grid; grid-template-columns: 1fr auto 1fr; gap: 10px; align-items: stretch; }
+  @media (max-width: 700px) { .row { grid-template-columns: 1fr; } }
+  .mid { display: flex; flex-direction: column; justify-content: center; gap: 8px; }
+  .mid button { padding: 8px 10px; font-size: 1em; cursor: pointer; }
+  textarea { width: 100%; box-sizing: border-box; height: 180px; font-size: 1.1em; font-family: inherit; padding: 6px; }
+  textarea.hex { font-family: Consolas, monospace; font-size: 1em; }
+  label.t { font-weight: bold; display: block; margin-bottom: 4px; }
+  .note { color: #555; font-size: 0.92em; }
+  .codes { font-family: Consolas, monospace; font-size: 0.9em; background: #f6f6f6; padding: 8px; border-radius: 4px; max-height: 160px; overflow: auto; white-space: pre-wrap; word-break: break-all; }
+  .err { color: #b00; }
+  table { border-collapse: collapse; font-size: 0.92em; margin-top: 6px; }
+  th, td { border: 1px solid #ccc; padding: 3px 7px; text-align: center; }
+  td.mono { font-family: Consolas, monospace; }
+  .bits b { color: #c33; } .bits i { color: #36c; font-style: normal; } .bits u { color: #393; text-decoration: none; }
+  fieldset { border: 1px solid #ddd; margin: 10px 0; }
+  details { margin-top: 12px; }
+</style>
+</head>
+<body>
+<h1>조합형 ↔ 완성형 한글 변환</h1>
+<p class="note">"조합형"은 두 가지 뜻으로 쓰여서 둘 다 넣었어요. 위 탭에서 고르세요. 모든 변환은 브라우저 안에서만 해요.</p>
+
+<div class="tabs">
+  <button id="tabU" class="on">① 유니코드: 완성형 음절 ↔ 첫가끝 자모</button>
+  <button id="tabE">② 옛 코드: 조합형(KS X 1001 부속서) ↔ 완성형</button>
+</div>
+
+<!-- ① 유니코드 -->
+<section class="panel" id="panelU">
+  <p class="note">완성형은 <code>가</code>(U+AC00) 같은 한 글자, 조합형은 <code>ᄀ+ᅡ</code>(U+1100 U+1161)처럼 첫소리·가운뎃소리·끝소리 자모를 이어 쓴 것(NFD)이에요. 맥 파일 이름이 "ㅎㅏㄴㄱㅡㄹ"처럼 풀려 보이는 게 이 조합형 때문이에요. 화면에서는 둘이 똑같이 보일 수 있어서 아래에 코드를 같이 보여 줘요.</p>
+  <fieldset>
+    <legend>조합형 쪽 형식</legend>
+    <label><input type="radio" name="ufmt" value="nfd" checked> 첫가끝 자모 (U+1100~, NFD)</label>
+    <label><input type="radio" name="ufmt" value="compat"> 낱자 (호환 자모 ㄱㅏㄴ, U+3131~)</label>
+  </fieldset>
+  <div class="row">
+    <div>
+      <label class="t" for="uL">완성형</label>
+      <textarea id="uL">한글 조합형과 완성형</textarea>
+    </div>
+    <div class="mid">
+      <button id="uToR">조합형으로 →</button>
+      <button id="uToL">← 완성형으로</button>
+    </div>
+    <div>
+      <label class="t" for="uR">조합형</label>
+      <textarea id="uR"></textarea>
+    </div>
+  </div>
+  <p class="note">완성형으로 바꿀 때는 첫가끝 자모, 낱자(ㄱㅏㄴ → 간, ㄷㅏㄹㄱ → 닭), 섞인 글 모두 받아요. 한글이 아닌 글자는 그대로 둬요.</p>
+  <label class="t">완성형 코드</label>
+  <div class="codes" id="uLc"></div>
+  <label class="t">조합형 코드</label>
+  <div class="codes" id="uRc"></div>
+</section>
+
+<!-- ② 옛 코드 -->
+<section class="panel" id="panelE" hidden>
+  <p class="note">1990년대 한글 코드 이야기예요. <b>조합형</b>(상용 조합형, KS X 1001:1992 부속서 3, Johab, CP1361)은 2바이트 16비트를 <code>1 | 초성 5비트 | 중성 5비트 | 종성 5비트</code>로 나눠 현대 한글 11,172자를 모두 표현해요. <b>완성형</b>(KS X 1001, EUC-KR)은 자주 쓰는 2,350자에만 번호를 매겨서, "똠"·"쀍" 같은 글자는 넣을 수 없어요.</p>
+  <div class="row">
+    <div>
+      <label class="t" for="eL">글 (완성형 글자)</label>
+      <textarea id="eL">똠방각하 한글 ABC 123</textarea>
+    </div>
+    <div class="mid">
+      <button id="eToR">조합형 코드로 →</button>
+      <button id="eToL">← 글로</button>
+    </div>
+    <div>
+      <label class="t" for="eR">조합형 바이트 (16진수)</label>
+      <textarea id="eR" class="hex"></textarea>
+    </div>
+  </div>
+  <p class="note">16진수 칸에는 <code>88 61</code>, <code>8861</code>, <code>0x8861</code> 모두 넣을 수 있어요. 한글, 한글 낱자, ASCII, 기호·한자(KS X 1001에 있는 것)를 바꿔요.</p>
+  <div id="eMsg" class="err"></div>
+  <label class="t">완성형(EUC-KR) 바이트</label>
+  <div class="codes" id="eEuc"></div>
+
+  <fieldset>
+    <legend>파일 변환</legend>
+    <div>
+      파일 열기:
+      <select id="fIn"><option value="johab">조합형</option><option value="euckr">완성형 (EUC-KR/CP949)</option><option value="utf8">UTF-8</option></select>
+      <input type="file" id="fFile">
+    </div>
+    <div style="margin-top:6px">
+      왼쪽 글을 저장:
+      <select id="fOut"><option value="johab">조합형</option><option value="euckr">완성형 (EUC-KR)</option><option value="utf8">UTF-8</option></select>
+      <button id="fSave">저장</button>
+    </div>
+    <p class="note">예: 옛 조합형 .txt를 "조합형"으로 열고 "UTF-8"로 저장하면 요즘 메모장에서 읽혀요. 완성형으로 저장할 때 2,350자 밖의 글자는 <code>?</code>가 돼요.</p>
+  </fieldset>
+
+  <details open>
+    <summary>글자별 비트 나누기 (앞 30자)</summary>
+    <table id="eTab"></table>
+    <p class="note"><span class="bits"><b>빨강</b> 초성, <i>파랑</i> 중성, <u>초록</u> 종성</span>. 값 1(초성·종성), 2(중성)는 "채움", 즉 그 자리가 비었다는 뜻이에요.</p>
+  </details>
+</section>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const hex = (n, w) => n.toString(16).toUpperCase().padStart(w, "0");
+
+// ---------- 공통: 자모 표 ----------
+const CHO = "ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ";
+const JUNG = "ㅏㅐㅑㅒㅓㅔㅕㅖㅗㅘㅙㅚㅛㅜㅝㅞㅟㅠㅡㅢㅣ";
+const JONG = " ㄱㄲㄳㄴㄵㄶㄷㄹㄺㄻㄼㄽㄾㄿㅀㅁㅂㅄㅅㅆㅇㅈㅊㅋㅌㅍㅎ"; // 0 = 없음
+const isSyl = c => c >= 0xAC00 && c <= 0xD7A3;
+const JONG_JOIN = { "ㄱㅅ":"ㄳ","ㄴㅈ":"ㄵ","ㄴㅎ":"ㄶ","ㄹㄱ":"ㄺ","ㄹㅁ":"ㄻ","ㄹㅂ":"ㄼ","ㄹㅅ":"ㄽ","ㄹㅌ":"ㄾ","ㄹㅍ":"ㄿ","ㄹㅎ":"ㅀ","ㅂㅅ":"ㅄ" };
+const JUNG_JOIN = { "ㅗㅏ":"ㅘ","ㅗㅐ":"ㅙ","ㅗㅣ":"ㅚ","ㅜㅓ":"ㅝ","ㅜㅔ":"ㅞ","ㅜㅣ":"ㅟ","ㅡㅣ":"ㅢ" };
+const JONG_SPLIT = {}; for (const k in JONG_JOIN) JONG_SPLIT[JONG_JOIN[k]] = [k[0], k[1]];
+
+// ---------- ① 유니코드 ----------
+function toNFD(s) {
+  let out = "";
+  for (const ch of s) {
+    const c = ch.codePointAt(0);
+    if (!isSyl(c)) { out += ch; continue; }
+    const S = c - 0xAC00, L = Math.floor(S / 588), V = Math.floor(S % 588 / 28), T = S % 28;
+    out += String.fromCharCode(0x1100 + L, 0x1161 + V) + (T ? String.fromCharCode(0x11A7 + T) : "");
+  }
+  return out;
+}
+function toCompat(s) {
+  let out = "";
+  for (const ch of s) {
+    const c = ch.codePointAt(0);
+    if (!isSyl(c)) { out += ch; continue; }
+    const S = c - 0xAC00;
+    out += CHO[Math.floor(S / 588)] + JUNG[Math.floor(S % 588 / 28)] + JONG[S % 28].trim();
+  }
+  return out;
+}
+// 첫가끝 자모 → 음절 (한글만 합치고 다른 글자는 그대로)
+function composeConjoining(s) {
+  const a = Array.from(s, ch => ch.codePointAt(0)), out = [];
+  for (let i = 0; i < a.length; i++) {
+    const c = a[i], n = a[i + 1];
+    if (c >= 0x1100 && c <= 0x1112 && n >= 0x1161 && n <= 0x1175) {
+      let syl = 0xAC00 + ((c - 0x1100) * 21 + (n - 0x1161)) * 28;
+      i++;
+      const t = a[i + 1];
+      if (t >= 0x11A8 && t <= 0x11C2) { syl += t - 0x11A7; i++; }
+      out.push(syl);
+    } else if (isSyl(c) && (c - 0xAC00) % 28 === 0 && n >= 0x11A8 && n <= 0x11C2) {
+      out.push(c + n - 0x11A7); i++;
+    } else out.push(c);
+  }
+  return String.fromCodePoint(...out);
+}
+// 낱자(호환 자모) → 음절. 두벌식 자판처럼 받침이 다음 글자로 넘어가는 것까지 처리.
+function composeCompat(s) {
+  let out = "", cho = null, jung = null, jong = null; // jong: 호환 자모 한 글자 (겹받침 가능)
+  const flush = () => {
+    if (cho && jung) out += String.fromCharCode(0xAC00 + (CHO.indexOf(cho) * 21 + JUNG.indexOf(jung)) * 28 + (jong ? JONG.indexOf(jong) : 0));
+    else { if (cho) out += cho; if (jung) out += jung; }
+    cho = jung = jong = null;
+  };
+  for (const ch of s) {
+    const isC = "ㄱㄲㄳㄴㄵㄶㄷㄸㄹㄺㄻㄼㄽㄾㄿㅀㅁㅂㅃㅄㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ".includes(ch);
+    const isV = JUNG.includes(ch);
+    if (isC) {
+      if (cho && jung && !jong && JONG.indexOf(ch) > 0) jong = ch;
+      else if (cho && jung && jong && JONG_JOIN[jong + ch]) jong = JONG_JOIN[jong + ch];
+      else { flush(); if (CHO.includes(ch)) cho = ch; else out += ch; }
+    } else if (isV) {
+      if (jong) {
+        const sp = JONG_SPLIT[jong];
+        let next;
+        if (sp) { jong = sp[0]; next = sp[1]; } else { next = jong; jong = null; }
+        flush(); cho = next; jung = ch;
+      } else if (jung && JUNG_JOIN[jung + ch]) jung = JUNG_JOIN[jung + ch];
+      else if (cho && !jung) jung = ch;
+      else { flush(); jung = ch; }
+    } else { flush(); out += ch; }
+  }
+  flush();
+  return out;
+}
+function codeList(s) {
+  return Array.from(s, ch => {
+    const c = ch.codePointAt(0);
+    const show = ch === "\n" ? "↵" : ch === " " ? "␠" : ch;
+    return show + " U+" + hex(c, 4);
+  }).join("   ");
+}
+function uShow() { $("uLc").textContent = codeList($("uL").value); $("uRc").textContent = codeList($("uR").value); }
+$("uToR").onclick = () => {
+  const fmt = document.querySelector("input[name=ufmt]:checked").value;
+  $("uR").value = fmt === "nfd" ? toNFD($("uL").value) : toCompat($("uL").value);
+  uShow();
+};
+$("uToL").onclick = () => { $("uL").value = composeConjoining(composeCompat($("uR").value)); uShow(); };
+$("uL").oninput = $("uR").oninput = uShow;
+
+// ---------- ② 옛 코드 ----------
+const CHO_CODE = i => i + 2;
+const JUNG_CODE = [3,4,5,6,7,10,11,12,13,14,15,18,19,20,21,22,23,26,27,28,29];
+const JONG_CODE = k => k === 0 ? 1 : k <= 16 ? k + 1 : k + 2;
+const COMPAT_CONS = "ㄱㄲㄳㄴㄵㄶㄷㄸㄹㄺㄻㄼㄽㄾㄿㅀㅁㅂㅃㅄㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ";
+
+const encJohab = new Map(), decJohab = new Map(), encEuc = new Map();
+(function buildTables() {
+  // KS X 1001 전체를 브라우저의 EUC-KR 디코더로 읽어 표를 만든다
+  const buf = new Uint8Array(94 * 94 * 2);
+  let p = 0;
+  for (let r = 0x21; r <= 0x7E; r++) for (let c = 0x21; c <= 0x7E; c++) { buf[p++] = r | 0x80; buf[p++] = c | 0x80; }
+  const txt = new TextDecoder("euc-kr").decode(buf);
+  let i = 0;
+  for (let r = 0x21; r <= 0x7E; r++) for (let c = 0x21; c <= 0x7E; c++) {
+    const u = txt.charCodeAt(i++);
+    if (u === 0xFFFD) continue;
+    if (!encEuc.has(u)) encEuc.set(u, ((r | 0x80) << 8) | (c | 0x80));
+    // 한글 음절 줄(0x30~0x48)과 빈 줄 0x49는 조합형에서 계산으로 처리, 나머지 기호·한자는 정해진 식으로 옮긴다
+    if ((r <= 0x2C) || (r >= 0x4A && r <= 0x7D)) {
+      const t = r < 0x4A ? r - 0x21 + 0x1B2 : r - 0x21 + 0x197;
+      const t2 = (t & 1 ? 0x5E : 0) + (c - 0x21);
+      const j = ((t >> 1) << 8) | (t2 < 0x4E ? t2 + 0x31 : t2 + 0x43);
+      if (!encJohab.has(u)) encJohab.set(u, j);
+      decJohab.set(j, u);
+    }
+  }
+  // 한글 음절 11,172자
+  for (let S = 0; S < 11172; S++) {
+    const j = 0x8000 | (CHO_CODE(Math.floor(S / 588)) << 10) | (JUNG_CODE[Math.floor(S % 588 / 28)] << 5) | JONG_CODE(S % 28);
+    encJohab.set(0xAC00 + S, j); decJohab.set(j, 0xAC00 + S);
+  }
+  // 한글 낱자: 초성 자리에 넣을 수 있으면 초성으로, 아니면 종성 자리로
+  for (const ch of COMPAT_CONS) {
+    const ci = CHO.indexOf(ch), ji = JONG.indexOf(ch);
+    const j = ci >= 0 ? 0x8000 | (CHO_CODE(ci) << 10) | (2 << 5) | 1 : 0x8000 | (1 << 10) | (2 << 5) | JONG_CODE(ji);
+    encJohab.set(ch.charCodeAt(0), j); decJohab.set(j, ch.charCodeAt(0));
+  }
+  for (let v = 0; v < 21; v++) {
+    const j = 0x8000 | (1 << 10) | (JUNG_CODE[v] << 5) | 1;
+    encJohab.set(JUNG.charCodeAt(v), j); decJohab.set(j, JUNG.charCodeAt(v));
+  }
+  encJohab.set(0x3164, 0x8441); decJohab.set(0x8441, 0x3164); // 채움 문자
+})();
+
+// 조합형 한글 구역에서 표에 없는 조합(예: 초성+종성만)은 첫가끝 자모로 풀어 준다
+function johabHangulFallback(j) {
+  const a = (j >> 10) & 31, b = (j >> 5) & 31, c = j & 31;
+  const ci = a - 2, vi = JUNG_CODE.indexOf(b), ti = c === 1 ? 0 : c <= 17 ? c - 1 : c - 2;
+  if ((a !== 1 && (ci < 0 || ci > 18)) || (b !== 2 && vi < 0) || c === 0 || c === 18 || c > 29) return null;
+  return String.fromCharCode(a === 1 ? 0x115F : 0x1100 + ci, b === 2 ? 0x1160 : 0x1161 + vi) + (ti ? String.fromCharCode(0x11A7 + ti) : "");
+}
+
+function encode(text, kind) {
+  const bytes = [], bad = new Set();
+  for (const ch of text) {
+    const u = ch.codePointAt(0);
+    if (kind === "utf8") { bytes.push(...new TextEncoder().encode(ch)); continue; }
+    if (u < 0x80) { bytes.push(u); continue; }
+    const code = (kind === "johab" ? encJohab : encEuc).get(u);
+    if (code === undefined) { bad.add(ch); bytes.push(0x3F); continue; }
+    bytes.push(code >> 8, code & 0xFF);
+  }
+  return { bytes, bad };
+}
+function decodeJohab(b) {
+  let out = "", bad = 0;
+  for (let i = 0; i < b.length; i++) {
+    const x = b[i];
+    if (x < 0x80) { out += String.fromCharCode(x); continue; }
+    if (i + 1 >= b.length) { out += "�"; bad++; break; }
+    const j = (x << 8) | b[i + 1];
+    const u = decJohab.get(j);
+    if (u !== undefined) { out += String.fromCharCode(u); i++; continue; }
+    const f = x >= 0x84 && x <= 0xD3 ? johabHangulFallback(j) : null;
+    if (f) { out += f; i++; continue; }
+    out += "�"; bad++; i++;
+  }
+  return { text: out, bad };
+}
+const hexStr = bytes => bytes.map(x => hex(x, 2)).join(" ");
+
+function eToR() {
+  const t = $("eL").value, r = encode(t, "johab"), e = encode(t, "euckr");
+  $("eR").value = hexStr(r.bytes);
+  $("eEuc").textContent = hexStr(e.bytes) + (e.bad.size ? "\n완성형에 없는 글자(?로 바뀜): " + [...e.bad].join(" ") : "");
+  $("eMsg").textContent = r.bad.size ? "조합형으로 못 바꾼 글자(?로 바뀜): " + [...r.bad].join(" ") : "";
+  eTable();
+}
+function eToL() {
+  const h = $("eR").value.replace(/0x/gi, "").replace(/[^0-9a-f]/gi, "");
+  if (h.length % 2) { $("eMsg").textContent = "16진수 글자 수가 홀수예요. 한 자리가 빠졌는지 봐 주세요."; return; }
+  const bytes = []; for (let i = 0; i < h.length; i += 2) bytes.push(parseInt(h.substr(i, 2), 16));
+  const d = decodeJohab(bytes);
+  $("eL").value = d.text;
+  $("eMsg").textContent = d.bad ? `조합형 코드로 읽을 수 없는 곳 ${d.bad}군데를 �로 표시했어요.` : "";
+  const e = encode(d.text, "euckr");
+  $("eEuc").textContent = hexStr(e.bytes) + (e.bad.size ? "\n완성형에 없는 글자(?로 바뀜): " + [...e.bad].join(" ") : "");
+  eTable();
+}
+function eTable() {
+  const rows = ["<tr><th>글자</th><th>조합형</th><th>비트 (1|초|중|종)</th><th>초/중/종</th><th>완성형(EUC-KR)</th></tr>"];
+  let n = 0;
+  for (const ch of $("eL").value) {
+    if (n >= 30) break;
+    const u = ch.codePointAt(0);
+    const j = encJohab.get(u);
+    if (j === undefined || j < 0x8000 || j > 0xD3FF) continue;
+    n++;
+    const b = j.toString(2).padStart(16, "0");
+    const a = (j >> 10) & 31, v = (j >> 5) & 31, c = j & 31;
+    const name = (a === 1 ? "채움" : CHO[a - 2]) + " / " + (v === 2 ? "채움" : JUNG[JUNG_CODE.indexOf(v)]) + " / " + (c === 1 ? "채움" : JONG[c <= 17 ? c - 1 : c - 2]);
+    const euc = encEuc.get(u);
+    rows.push(`<tr><td>${ch}</td><td class="mono">${hex(j, 4)}</td><td class="mono bits">${b[0]} <b>${b.slice(1, 6)}</b> <i>${b.slice(6, 11)}</i> <u>${b.slice(11)}</u></td><td>${name}</td><td class="mono">${euc === undefined ? '<span class="err">없음</span>' : hex(euc, 4)}</td></tr>`);
+  }
+  $("eTab").innerHTML = rows.join("");
+}
+$("eToR").onclick = eToR;
+$("eToL").onclick = eToL;
+
+$("fFile").onchange = async ev => {
+  const f = ev.target.files[0]; if (!f) return;
+  const b = new Uint8Array(await f.arrayBuffer()), kind = $("fIn").value;
+  let text, bad = 0;
+  if (kind === "johab") ({ text, bad } = decodeJohab(b));
+  else text = new TextDecoder(kind === "euckr" ? "euc-kr" : "utf-8").decode(b);
+  $("eL").value = text;
+  eToR();
+  if (bad) $("eMsg").textContent = `조합형으로 읽을 수 없는 곳 ${bad}군데를 �로 표시했어요. 다른 인코딩 파일일 수 있어요.`;
+};
+$("fSave").onclick = () => {
+  const kind = $("fOut").value, r = encode($("eL").value, kind);
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([new Uint8Array(r.bytes)], { type: "application/octet-stream" }));
+  a.download = { johab: "johab.txt", euckr: "euckr.txt", utf8: "utf8.txt" }[kind];
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  $("eMsg").textContent = r.bad.size ? "저장할 때 못 바꾼 글자(?로 바뀜): " + [...r.bad].join(" ") : "";
+};
+
+// ---------- 탭 ----------
+$("tabU").onclick = () => { $("panelU").hidden = false; $("panelE").hidden = true; $("tabU").className = "on"; $("tabE").className = ""; };
+$("tabE").onclick = () => { $("panelU").hidden = true; $("panelE").hidden = false; $("tabE").className = "on"; $("tabU").className = ""; };
+
+$("uToR").click();
+eToR();
+</script>
+</body>
+</html>
