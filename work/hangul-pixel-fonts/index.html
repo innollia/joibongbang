@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>한글 픽셀·비트맵 폰트 목록</title>
+<style>
+  body { font-family: system-ui, "Malgun Gothic", sans-serif; max-width: 1100px; margin: 0 auto; padding: 16px; line-height: 1.5; color: #222; }
+  h1 { font-size: 1.5em; margin-bottom: 8px; }
+  .filters { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding: 10px 12px; background: #f4f4f4; border-radius: 6px; position: sticky; top: 0; z-index: 1; }
+  .filters label { white-space: nowrap; }
+  .filters select, .filters input[type=search] { font-size: 0.95em; padding: 3px 5px; }
+  .filters input[type=search] { width: 180px; }
+  #count { margin-left: auto; color: #555; }
+  table { border-collapse: collapse; width: 100%; margin-top: 10px; font-size: 0.93em; }
+  th, td { border-bottom: 1px solid #ddd; padding: 6px 8px; text-align: left; vertical-align: top; }
+  th { background: #fafafa; cursor: pointer; user-select: none; white-space: nowrap; }
+  th.sorted::after { content: " ▲"; font-size: 0.8em; }
+  th.sorted.desc::after { content: " ▼"; }
+  td.name a { font-weight: bold; }
+  td.small { color: #555; font-size: 0.92em; }
+  .tag { display: inline-block; padding: 0 6px; border-radius: 4px; font-size: 0.85em; margin: 1px 2px 1px 0; white-space: nowrap; }
+  .yes { background: #dff3df; } .no { background: #f3e0e0; } .unk { background: #eee; color: #777; }
+  .t-pixel { background: #e3ecfb; } .t-bitmap { background: #fbeedd; } .t-both { background: #efe3fb; }
+  a { color: #0563c1; }
+  @media (max-width: 760px) { td.desc, th.desc { display: none; } }
+</style>
+</head>
+<body>
+<h1>한글 픽셀·비트맵 폰트 목록</h1>
+
+<div class="filters">
+  <input type="search" id="q" placeholder="이름·만든 이 검색">
+  <label>종류 <select id="fType">
+    <option value="">전체</option><option value="pixel">픽셀 (TTF/OTF)</option><option value="bitmap">비트맵 (BDF 등)</option><option value="both">둘 다</option><option value="hasbitmap">비트맵 파일 있음</option>
+  </select></label>
+  <label>고정폭 <select id="fMono">
+    <option value="">전체</option><option value="true">고정폭</option><option value="false">비례폭</option><option value="null">모름</option>
+  </select></label>
+  <label>코딩용 <select id="fCoding">
+    <option value="">전체</option><option value="true">코딩용</option><option value="false">아님</option>
+  </select></label>
+  <label>한글 범위 <select id="fHangul">
+    <option value="">전체</option><option value="full11172">11,172자 전부</option><option value="ks2350">2,350자</option><option value="partial">일부</option><option value="unknown">모름</option>
+  </select></label>
+  <label>라이선스 <select id="fLic">
+    <option value="">전체</option><option value="open">오픈 라이선스 (OFL·MIT·CC 등)</option><option value="other">그 밖 (무료 폰트 약관)</option>
+  </select></label>
+  <span id="count"></span>
+</div>
+
+<table>
+  <thead><tr>
+    <th data-k="name">이름</th>
+    <th data-k="type">종류</th>
+    <th data-k="mono">고정폭</th>
+    <th data-k="coding">코딩용</th>
+    <th data-k="hangul">한글</th>
+    <th data-k="sizes">크기(px)</th>
+    <th data-k="formats">형식</th>
+    <th data-k="license">라이선스</th>
+    <th class="desc" data-k="desc">특징</th>
+  </tr></thead>
+  <tbody id="rows"></tbody>
+</table>
+
+<script>
+const TYPE = { pixel: "픽셀", bitmap: "비트맵", both: "픽셀+비트맵" };
+const HANGUL = { full11172: "11,172자", ks2350: "2,350자", partial: "일부", unknown: "모름" };
+const OPEN_RE = /OFL|MIT|Apache|GPL|BSD|CC0|CC BY|Public Domain|퍼블릭/i;
+const BITMAP_FMT = ["bdf", "pcf", "fon", "fnt", "psf", "hex", "bmf"];
+let fonts = [], sortKey = "name", sortDesc = false;
+
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const yn = v => v === true ? '<span class="tag yes">예</span>' : v === false ? '<span class="tag no">아니요</span>' : '<span class="tag unk">모름</span>';
+
+function rank(f, k) {
+  const v = f[k];
+  if (k === "sizes") return v && v.length ? Math.min(...v) : 999;
+  if (k === "formats") return (v || []).join(",");
+  if (k === "mono" || k === "coding") return v === true ? 0 : v === false ? 1 : 2;
+  if (k === "hangul") return ["full11172", "ks2350", "partial", "unknown"].indexOf(v);
+  return String(v ?? "").toLowerCase();
+}
+
+function pass(f) {
+  const g = id => document.getElementById(id).value;
+  const q = g("q").trim().toLowerCase();
+  if (q && !(f.name + " " + f.author + " " + f.desc).toLowerCase().includes(q)) return false;
+  const t = g("fType");
+  if (t === "hasbitmap") { if (!(f.formats || []).some(x => BITMAP_FMT.includes(x.toLowerCase())) && f.type === "pixel") return false; }
+  else if (t && f.type !== t) return false;
+  if (g("fMono") && String(f.mono) !== g("fMono")) return false;
+  if (g("fCoding") && String(f.coding) !== g("fCoding")) return false;
+  if (g("fHangul") && f.hangul !== g("fHangul")) return false;
+  const lic = g("fLic");
+  if (lic === "open" && !OPEN_RE.test(f.license || "")) return false;
+  if (lic === "other" && OPEN_RE.test(f.license || "")) return false;
+  return true;
+}
+
+function render() {
+  const list = fonts.filter(pass).sort((a, b) => {
+    const x = rank(a, sortKey), y = rank(b, sortKey);
+    return (x < y ? -1 : x > y ? 1 : 0) * (sortDesc ? -1 : 1);
+  });
+  document.getElementById("count").textContent = `${list.length} / ${fonts.length}개`;
+  document.getElementById("rows").innerHTML = list.map(f => `<tr>
+    <td class="name"><a href="${esc(f.url)}" target="_blank" rel="noopener">${esc(f.name)}</a>
+      <div class="small">${esc(f.author)}${f.noonnu && f.noonnu !== f.url ? ` · <a href="${esc(f.noonnu)}" target="_blank" rel="noopener">눈누</a>` : ""}</div></td>
+    <td><span class="tag t-${esc(f.type)}">${TYPE[f.type] || esc(f.type)}</span></td>
+    <td>${yn(f.mono)}</td>
+    <td>${f.coding ? '<span class="tag yes">예</span>' : ""}</td>
+    <td>${f.hangul === "unknown" ? '<span class="tag unk">모름</span>' : esc(HANGUL[f.hangul] || f.hangul)}</td>
+    <td class="small">${f.sizes && f.sizes.length ? esc(f.sizes.join(", ")) : ""}</td>
+    <td class="small">${esc((f.formats || []).join(", "))}</td>
+    <td class="small">${esc(f.license)}</td>
+    <td class="desc small">${esc(f.desc)}</td>
+  </tr>`).join("");
+  document.querySelectorAll("th").forEach(th => {
+    th.classList.toggle("sorted", th.dataset.k === sortKey);
+    th.classList.toggle("desc", th.dataset.k === sortKey && sortDesc);
+  });
+}
+
+document.querySelectorAll(".filters select, .filters input").forEach(el => el.addEventListener("input", render));
+document.querySelectorAll("th").forEach(th => th.addEventListener("click", () => {
+  if (sortKey === th.dataset.k) sortDesc = !sortDesc; else { sortKey = th.dataset.k; sortDesc = false; }
+  render();
+}));
+
+fetch("fonts.json").then(r => r.json()).then(d => { fonts = d; render(); })
+  .catch(() => { document.getElementById("rows").innerHTML = '<tr><td colspan="9" class="small">목록을 불러오지 못했어요.</td></tr>'; });
+</script>
+</body>
+</html>
