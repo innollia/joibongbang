@@ -73,9 +73,14 @@ def reply(md: Path, to: str) -> None:
     print("답장 완료")
 
 
+def say(text: str) -> None:
+    call("POST", f"/channels/{THREAD_ID}/messages", {"content": text.strip()[:MAX_CHUNK], "allowed_mentions": {"parse": []}})
+
+
 p = argparse.ArgumentParser()
 sub = p.add_subparsers(dest="cmd", required=True)
 r = sub.add_parser("read"); r.add_argument("--limit", type=int, default=30)
 w = sub.add_parser("reply"); w.add_argument("file", type=Path); w.add_argument("--to", required=True)
+s_ = sub.add_parser("say"); s_.add_argument("text")
 a = p.parse_args()
-read(a.limit) if a.cmd == "read" else reply(a.file, a.to)
+read(a.limit) if a.cmd == "read" else say(a.text) if a.cmd == "say" else reply(a.file, a.to)

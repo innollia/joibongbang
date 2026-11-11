@@ -12,6 +12,7 @@
 2. 답장으로 끝나는 일이면 답만 한다. 결과물이 필요한 일이면 만든다. 일이 크면 이번 호출에 할 수 있는 만큼 하고 남은 것을 답장에 적는다.
 3. 파일을 만들었으면 `git add -A && git commit -m "<요약>"` 후 `git push`. 커밋 메시지 끝에 빈 줄과 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 4. 답장을 임시 md 파일로 쓰고 `python tools/discord.py reply <파일> --to <호출 message_id>`. 결과물이 있으면 링크(`https://innollia.github.io/joibongbang/work/<이름>/`, 반영에 1~2분)를 붙인다. 1500자 이내, 짧게.
+- 작업 중 진행 상황: 방향을 정했을 때, 큰 단계를 시작할 때, 막혀서 길을 바꿀 때 `python tools/discord.py say "<한두 문장>"`으로 스레드에 올린다. 예: "Eve 설정은 AWS SSM으로 바꿀 수 있는 걸 찾았어요. 새 스레드를 Eve 등록 목록에 넣을게요." 무엇을 알았고 다음에 뭘 할지만, 쉬운 말로. 한 호출에 3~8개, 도구 호출마다 올리지 않는다.
 
 ## 금지
 - 토큰·비밀값 출력·저장. 디스코드 @멘션. 이 스레드 밖에 쓰기.
